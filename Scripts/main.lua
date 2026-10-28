@@ -1,7 +1,7 @@
 local UEHelpers = require("UEHelpers")
 local config = require("config")
 
-local MOD_VERSION = "0.1.0"
+local MOD_VERSION = "0.2.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_Z = 1.0009765625
@@ -16,6 +16,7 @@ local MATCH_CM = config.spawner_match_distance_cm
 local MATCH_SQ = MATCH_CM * MATCH_CM
 local BEAM_ASSET_NAME = config.beam_effect_path:match("%.([^%.]+)$") or config.beam_effect_path
 local ZERO_ROTATION = { Pitch = 0, Yaw = 0, Roll = 0 }
+local CLOCK_CHECK_EVERY = 32 -- items bewteen clock checks while scanning
 
 local hotkeyOn = false
 local buildModeOn = false
@@ -259,7 +260,11 @@ local function spawnMarker(world, marker)
         return library:SpawnSystemAtLocation(world, asset, toVector(marker.location), ZERO_ROTATION,
             { X = 1, Y = 1, Z = MARKER_SCALE_Z }, false, true, 0, false)
     end)
-    if not ok or not isValid(component) then
+    if not ok then
+        log("marker spawn failed: " .. tostring(component))
+        return nil
+    end
+    if not isValid(component) then
         return nil
     end
     return component
@@ -335,27 +340,10 @@ local function sweepLeftoverMarkers()
     end
 end
 
--- called between items, yields the coroutine once the deadline has passed so the scan carries on next tick, weight = how much work an item is
-local function makeStepper(deadline, report)
-    local work = 0
-    return function(weight)
-        work = work + (weight or 1)
-        if work < 64 then
-            return
-        end
-        work = 0
-        if now() < deadline then
-            return
-        end
-        report.slices = report.slices + 1
-        deadline = coroutine.yield()
-    end
-end
-
 -- numbers for the diag lines
 local function newReport()
     return {
-        slices = 1,
+        slices = 0,
         cacheRebuilt = false,
         cacheMs = 0,
         foliageTotal = 0,
@@ -363,68 +351,16 @@ local function newReport()
         foliageNearby = 0,
         spawnerTotal = 0,
         spawnersNearby = 0,
+        mapObjectsTotal = 0,
         mapObjectsNearby = 0,
         states = {},
         spawnerClasses = {},
         neighbourClasses = {},
         trees = 0,
         rocks = 0,
+        spawned = 0,
         wallMs = 0,
     }
-end
-
--- all foliage in memory, only the ones within reach are kept
-local function collectFoliage(origin, step, report)
-    local nearby = {}
-    if not config.show_trees then
-        return nearby
-    end
-    local ok, all = pcall(FindAllOf, "PalFoliageInstance")
-    if not ok or all == nil then
-        return nearby
-    end
-    report.foliageTotal = #all
-    for _, instance in ipairs(all) do
-        step(1)
-        local location = nil
-        if isValid(instance) then
-            location = foliageLocation(instance)
-        end
-        if location == nil then
-            report.foliageWithoutLocation = report.foliageWithoutLocation + 1
-        elseif distanceSq2D(location, origin) <= REACH_SQ then
-            nearby[#nearby + 1] = { object = instance, location = location }
-        end
-    end
-    report.foliageNearby = #nearby
-    return nearby
-end
-
--- spawners within reach that don't match spawner_class_excludes
-local function collectSpawners(origin, step, report)
-    local nearby = {}
-    if not config.show_rocks then
-        return nearby
-    end
-    local ok, all = pcall(FindAllOf, "PalMapObjectSpawnerBase")
-    if not ok or all == nil then
-        return nearby
-    end
-    report.spawnerTotal = #all
-    for _, spawner in ipairs(all) do
-        step(1)
-        if isValid(spawner) then
-            local name = className(spawner)
-            local location = actorLocation(spawner)
-            if not containsAny(name, config.spawner_class_excludes)
-                and location ~= nil
-                and distanceSq2D(location, origin) <= REACH_SQ then
-                nearby[#nearby + 1] = { object = spawner, location = location, className = name }
-            end
-        end
-    end
-    report.spawnersNearby = #nearby
-    return nearby
 end
 
 -- rebuild once the player left the cache margin or the cache is older then cache_rebuild_interval_ms
@@ -438,45 +374,12 @@ local function cacheIsStale(origin)
     return now() - cache.builtAt > config.cache_rebuild_interval_ms
 end
 
--- foliage and spawners near the player, reused until the player walks out of the cache margin
-local function rebuildCache(origin, step, report)
-    local started = now()
-    local foliage = collectFoliage(origin, step, report)
-    local spawners = collectSpawners(origin, step, report)
-    cache = { origin = origin, builtAt = now(), foliage = foliage, spawners = spawners }
-    report.cacheRebuilt = true
-    report.cacheMs = now() - started
-end
-
 -- grid cell as a string key, cells are MATCH_CM wide
 local function cellKey(x, y)
     return math.floor(x / MATCH_CM) .. ":" .. math.floor(y / MATCH_CM)
 end
 
--- map objects within reach in a grid of MATCH_CM cells, so each spawner only checks its neighbours
-local function buildOccupancy(origin, step, report)
-    local grid = {}
-    local ok, all = pcall(FindAllOf, "PalMapObject")
-    if not ok or all == nil then
-        return grid
-    end
-    for _, object in ipairs(all) do
-        step(1)
-        if isValid(object) then
-            local location = actorLocation(object)
-            if location ~= nil and distanceSq2D(location, origin) <= REACH_SQ then
-                local key = cellKey(location.x, location.y)
-                local bucket = grid[key] or {}
-                bucket[#bucket + 1] = { object = object, location = location }
-                grid[key] = bucket
-                report.mapObjectsNearby = report.mapObjectsNearby + 1
-            end
-        end
-    end
-    return grid
-end
-
--- closest map object in the 3x3 cells around location, spawners are skiped so a spawner never counts as its own rock
+-- closest map object in the 3x3 cells around location, cells are MATCH_CM wide so nothign in range is missed
 local function nearestOccupant(grid, location)
     local cellX = math.floor(location.x / MATCH_CM)
     local cellY = math.floor(location.y / MATCH_CM)
@@ -488,7 +391,7 @@ local function nearestOccupant(grid, location)
             if bucket ~= nil then
                 for _, entry in ipairs(bucket) do
                     local distanceSq = distanceSq3D(entry.location, location)
-                    if distanceSq < bestSq and not className(entry.object):find("Spawner", 1, true) then
+                    if distanceSq < bestSq then
                         best = entry
                         bestSq = distanceSq
                     end
@@ -503,83 +406,143 @@ local function countInto(map, key)
     map[key] = (map[key] or 0) + 1
 end
 
--- anything not alive within the radius gets a tree marker
-local function evaluateTrees(origin, step, report, markers)
-    for _, entry in ipairs(cache.foliage) do
-        step(1)
-        local state = readFoliageState(entry.object)
-        if state ~= nil then
-            countInto(report.states, state)
-            local distanceSq = distanceSq2D(entry.location, origin)
-            if state ~= config.foliage_alive_state and distanceSq <= RADIUS_SQ then
-                markers[#markers + 1] = { kind = "tree", location = entry.location, distanceSq = distanceSq }
+-- FindAllOf result stored on the job, empty list if it failed
+local function loadList(target, classNameToFind)
+    local ok, all = pcall(FindAllOf, classNameToFind)
+    if not ok then
+        log("FindAllOf(" .. classNameToFind .. ") failed: " .. tostring(all))
+    end
+    target.list = (ok and all) or {}
+    target.index = 1
+    return #target.list
+end
+
+-- visits from the saved index until deadline, false = not done yet, carries on next tick
+local function sweepList(target, deadline, every, visit)
+    local list = target.list
+    if list == nil then
+        return true
+    end
+    local sinceCheck = 0
+    while target.index <= #list do
+        visit(list[target.index])
+        target.index = target.index + 1
+        sinceCheck = sinceCheck + 1
+        if sinceCheck >= every then
+            sinceCheck = 0
+            if now() >= deadline then
+                return false
             end
         end
     end
+    target.list = nil
+    target.index = 1
+    return true
 end
 
--- spawner with no map object within spawner_match_distance_cm counts as mined
-local function evaluateRocks(origin, step, report, markers)
-    if #cache.spawners == 0 then
+-- only foliage within reach is kept, so later refreshes don't walk all of it agian
+local function collectFoliageEntry(current, instance)
+    local location = nil
+    if isValid(instance) then
+        location = foliageLocation(instance)
+    end
+    if location == nil then
+        current.report.foliageWithoutLocation = current.report.foliageWithoutLocation + 1
         return
     end
-    local grid = buildOccupancy(origin, step, report)
-    for _, entry in ipairs(cache.spawners) do
-        step(2)
-        local distanceSq = distanceSq2D(entry.location, origin)
-        if isValid(entry.object) and distanceSq <= RADIUS_SQ then
-            local occupant, occupantSq = nearestOccupant(grid, entry.location)
-            local exhausted = occupant == nil or occupantSq > MATCH_SQ
-            local classStats = report.spawnerClasses[entry.className] or { total = 0, exhausted = 0 }
-            classStats.total = classStats.total + 1
-            report.spawnerClasses[entry.className] = classStats
-            if exhausted then
-                classStats.exhausted = classStats.exhausted + 1
-                markers[#markers + 1] = { kind = "rock", location = entry.location, distanceSq = distanceSq }
-            else
-                countInto(report.neighbourClasses, className(occupant.object))
-            end
-        end
+    if distanceSq2D(location, current.origin) > REACH_SQ then
+        return
     end
+    current.foliage[#current.foliage + 1] = { object = instance, location = location }
 end
 
--- closest max_markers markers, counted as trees or rocks for the chat line
-local function selectMarkers(markers, report)
+-- spawners matching spawner_class_excludes are skipped (chests, eggs, junk), not case sensitive
+local function collectSpawnerEntry(current, spawner)
+    if not isValid(spawner) then
+        return
+    end
+    local name = className(spawner)
+    if containsAny(name, config.spawner_class_excludes) then
+        return
+    end
+    local location = actorLocation(spawner)
+    if location == nil or distanceSq2D(location, current.origin) > REACH_SQ then
+        return
+    end
+    current.spawners[#current.spawners + 1] = { object = spawner, location = location, className = name }
+end
+
+-- spawners are left out so a spawner never counts as its own rock
+local function collectOccupant(current, object)
+    if not isValid(object) then
+        return
+    end
+    local location = actorLocation(object)
+    if location == nil or distanceSq2D(location, current.origin) > REACH_SQ then
+        return
+    end
+    local name = className(object)
+    if name:find("Spawner", 1, true) ~= nil then
+        return
+    end
+    local key = cellKey(location.x, location.y)
+    local bucket = current.grid[key] or {}
+    bucket[#bucket + 1] = { location = location, className = name }
+    current.grid[key] = bucket
+    current.report.mapObjectsNearby = current.report.mapObjectsNearby + 1
+end
+
+-- anything not alive within the radius gets a tree marker
+local function evaluateTree(current, entry)
+    local state = readFoliageState(entry.object)
+    if state == nil then
+        return
+    end
+    countInto(current.report.states, state)
+    if state == config.foliage_alive_state then
+        return
+    end
+    local distanceSq = distanceSq2D(entry.location, current.origin)
+    if distanceSq > RADIUS_SQ then
+        return
+    end
+    current.markers[#current.markers + 1] = { kind = "tree", location = entry.location, distanceSq = distanceSq }
+end
+
+-- no map object within spawner_match_distance_cm of the spawner, so the rock was mined
+local function evaluateRock(current, entry)
+    local distanceSq = distanceSq2D(entry.location, current.origin)
+    if distanceSq > RADIUS_SQ or not isValid(entry.object) then
+        return
+    end
+    local report = current.report
+    local classStats = report.spawnerClasses[entry.className] or { total = 0, exhausted = 0 }
+    classStats.total = classStats.total + 1
+    report.spawnerClasses[entry.className] = classStats
+    local occupant, occupantSq = nearestOccupant(current.grid, entry.location)
+    if occupant ~= nil and occupantSq <= MATCH_SQ then
+        countInto(report.neighbourClasses, occupant.className)
+        return
+    end
+    classStats.exhausted = classStats.exhausted + 1
+    current.markers[#current.markers + 1] = { kind = "rock", location = entry.location, distanceSq = distanceSq }
+end
+
+-- closest max_markers spots, counted as trees or rocks for the chat line
+local function selectMarkers(current)
+    local markers = current.markers
     table.sort(markers, function(a, b) return a.distanceSq < b.distanceSq end)
-    local selected = {}
+    local wanted = {}
     for index = 1, math.min(#markers, config.max_markers) do
         local marker = markers[index]
-        selected[#selected + 1] = marker
-        if marker.kind == "tree" then
-            report.trees = report.trees + 1
-        else
-            report.rocks = report.rocks + 1
-        end
-    end
-    return selected
-end
-
--- markers that went away get hidden, new ones are spawned or taken from the pool
-local function applyMarkers(world, markers, step)
-    local wanted = {}
-    for _, marker in ipairs(markers) do
         wanted[markerKey(marker.location)] = marker
-    end
-    for key, component in pairs(activeMarkers) do
-        if wanted[key] == nil or not isValid(component) then
-            releaseMarker(component)
-            activeMarkers[key] = nil
+        if marker.kind == "tree" then
+            current.report.trees = current.report.trees + 1
+        else
+            current.report.rocks = current.report.rocks + 1
         end
     end
-    for key, marker in pairs(wanted) do
-        if activeMarkers[key] == nil then
-            step(16)
-            local component = acquireMarker(world, marker)
-            if component ~= nil then
-                activeMarkers[key] = component
-            end
-        end
-    end
+    return wanted
 end
 
 -- key=count list for the diag lines, (none) if empty
@@ -650,50 +613,159 @@ local function logReport(report)
     log("diag foliage states within reach: " .. formatCounts(report.states))
     log("diag spawner classes within radius (exhausted/total): " .. formatCounts(report.spawnerClasses))
     log("diag map objects occupying spawners: " .. formatCounts(report.neighbourClasses)
-        .. " (map objects within reach " .. report.mapObjectsNearby .. ")")
-    log(string.format("diag refresh took %.1f ms wall over %d slice(s); markers: %d trees, %d rocks",
-        report.wallMs, report.slices, report.trees, report.rocks))
+        .. " (map objects in memory " .. report.mapObjectsTotal .. ", within reach " .. report.mapObjectsNearby .. ")")
+    log(string.format("diag refresh took %.1f ms wall over %d slice(s); markers: %d trees, %d rocks, %d newly shown",
+        report.wallMs, report.slices, report.trees, report.rocks, report.spawned))
     logProperties()
 end
 
--- one full refresh, runs inside a coroutine so it can pause betwen ticks
-local function runRefresh(deadline, world, origin)
-    local report = newReport()
-    local step = makeStepper(deadline, report)
-    local started = now()
-    if cacheIsStale(origin) then
-        rebuildCache(origin, step, report)
-    end
-    local markers = {}
-    evaluateTrees(origin, step, report, markers)
-    evaluateRocks(origin, step, report, markers)
-    applyMarkers(world, selectMarkers(markers, report), step)
-    report.wallMs = now() - started
-    logReport(report)
-    if not announceNextResult then
-        return
-    end
-    announceNextResult = false
-    say(string.format("Exhausted within %d m: %d trees, %d rocks", config.radius_meters, report.trees, report.rocks))
-end
+-- refresh split in steps, each one can stop when the time budget is used and carry on next tick
+-- NO COROUTINES HERE, UE4SS FUNCTIONS FAIL INSIDE A COROUTINE ("lua state has no instance")
+local STAGES = {
+    -- find foliage
+    function(current)
+        if not current.rebuild or not config.show_trees then
+            return true
+        end
+        current.report.foliageTotal = loadList(current, "PalFoliageInstance")
+        return true
+    end,
+    -- foliage in reach
+    function(current, deadline)
+        return sweepList(current, deadline, CLOCK_CHECK_EVERY, function(instance)
+            collectFoliageEntry(current, instance)
+        end)
+    end,
+    -- find spawners
+    function(current)
+        if not current.rebuild or not config.show_rocks then
+            return true
+        end
+        current.report.spawnerTotal = loadList(current, "PalMapObjectSpawnerBase")
+        return true
+    end,
+    -- spawners in reach
+    function(current, deadline)
+        return sweepList(current, deadline, CLOCK_CHECK_EVERY, function(spawner)
+            collectSpawnerEntry(current, spawner)
+        end)
+    end,
+    -- save cache
+    function(current)
+        if current.rebuild then
+            cache = { origin = current.origin, builtAt = now(), foliage = current.foliage, spawners = current.spawners }
+            current.report.cacheRebuilt = true
+            current.report.cacheMs = now() - current.started
+            current.report.foliageNearby = #current.foliage
+            current.report.spawnersNearby = #current.spawners
+        end
+        current.list = cache.foliage
+        current.index = 1
+        return true
+    end,
+    -- tree states
+    function(current, deadline)
+        return sweepList(current, deadline, CLOCK_CHECK_EVERY, function(entry)
+            evaluateTree(current, entry)
+        end)
+    end,
+    -- find map objects
+    function(current)
+        if #cache.spawners == 0 then
+            return true
+        end
+        current.report.mapObjectsTotal = loadList(current, "PalMapObject")
+        return true
+    end,
+    -- map objects into grid
+    function(current, deadline)
+        return sweepList(current, deadline, CLOCK_CHECK_EVERY, function(object)
+            collectOccupant(current, object)
+        end)
+    end,
+    -- queue spawners
+    function(current)
+        current.list = cache.spawners
+        current.index = 1
+        return true
+    end,
+    -- mined rocks
+    function(current, deadline)
+        return sweepList(current, deadline, CLOCK_CHECK_EVERY, function(entry)
+            evaluateRock(current, entry)
+        end)
+    end,
+    -- markers that went away get hidden, new ones get queued
+    function(current)
+        local wanted = selectMarkers(current)
+        for key, component in pairs(activeMarkers) do
+            if wanted[key] == nil or not isValid(component) then
+                releaseMarker(component)
+                activeMarkers[key] = nil
+            end
+        end
+        local pending = {}
+        for key, marker in pairs(wanted) do
+            if activeMarkers[key] == nil then
+                pending[#pending + 1] = { key = key, marker = marker }
+            end
+        end
+        current.list = pending
+        current.index = 1
+        return true
+    end,
+    -- spawn new markers
+    function(current, deadline)
+        return sweepList(current, deadline, 4, function(item)
+            local component = acquireMarker(current.world, item.marker)
+            if component == nil then
+                return
+            end
+            activeMarkers[item.key] = component
+            current.report.spawned = current.report.spawned + 1
+        end)
+    end,
+    -- report
+    function(current)
+        current.report.wallMs = now() - current.started
+        logReport(current.report)
+        if not announceNextResult then
+            return true
+        end
+        announceNextResult = false
+        say(string.format("Exhausted within %d m: %d trees, %d rocks",
+            config.radius_meters, current.report.trees, current.report.rocks))
+        return true
+    end,
+}
 
--- gives the coroutine a new deadline, job is cleared once it finishes or throws
-local function resumeJob()
-    local ok, err = coroutine.resume(job, now() + config.scan_budget_ms)
-    if not ok then
-        log("refresh failed: " .. tostring(err))
-        job = nil
-        lastRefreshAt = now()
-        return
-    end
-    if coroutine.status(job) ~= "dead" then
-        return
-    end
+local function finishJob()
     job = nil
     lastRefreshAt = now()
 end
 
--- refresh as a coroutine, the first slice runs right away
+-- runs stages until one isn't finished or the budget is used up, a failing stage drops the whole refresh
+local function advanceJob()
+    local deadline = now() + config.scan_budget_ms
+    job.report.slices = job.report.slices + 1
+    while job.stage <= #STAGES do
+        local ok, done = pcall(STAGES[job.stage], job, deadline)
+        if not ok then
+            log("refresh failed at stage " .. job.stage .. ": " .. tostring(done))
+            finishJob()
+            return
+        end
+        if not done then
+            return
+        end
+        job.stage = job.stage + 1
+        if now() >= deadline and job.stage <= #STAGES then
+            return
+        end
+    end
+    finishJob()
+end
+
 local function startJob(pawn)
     local origin = actorLocation(pawn)
     if origin == nil then
@@ -703,8 +775,21 @@ local function startJob(pawn)
     if not ok or not isValid(world) then
         return
     end
-    job = coroutine.create(function(deadline) runRefresh(deadline, world, origin) end)
-    resumeJob()
+    job = {
+        world = world,
+        origin = origin,
+        rebuild = cacheIsStale(origin),
+        started = now(),
+        stage = 1,
+        list = nil,
+        index = 1,
+        foliage = {},
+        spawners = {},
+        grid = {},
+        markers = {},
+        report = newReport(),
+    }
+    advanceJob()
 end
 
 -- builder component on the player, searched again at most every 2 s
@@ -813,7 +898,7 @@ local function tick()
         forceRefresh = true
     end
     if job ~= nil then
-        resumeJob()
+        advanceJob()
         return
     end
     if not forceRefresh and now() - lastRefreshAt < config.refresh_interval_ms then
