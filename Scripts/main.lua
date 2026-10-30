@@ -1,7 +1,7 @@
 local UEHelpers = require("UEHelpers")
 local config = require("config")
 
-local MOD_VERSION = "0.2.0"
+local MOD_VERSION = "0.3.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_Z = 1.0009765625
@@ -94,10 +94,11 @@ local function className(object)
     return name
 end
 
--- true if any needle is in the text, case sensitive
+-- not case sensitive, so lowercase class names like bp_palmapobjectspawner_palegg still match
 local function containsAny(text, needles)
+    local lowered = text:lower()
     for _, needle in ipairs(needles) do
-        if text:find(needle, 1, true) ~= nil then
+        if lowered:find(needle:lower(), 1, true) ~= nil then
             return true
         end
     end
@@ -289,13 +290,16 @@ local function acquireMarker(world, marker)
     return component
 end
 
--- hidden and kept for reuse, destroyed once the pool is full
+-- hidden and kept for reuse, DeactivateImmediate so no particles linger, plain Deactivate if that one fails
 local function releaseMarker(component)
     if not isValid(component) then
         return
     end
     pcall(function() component:SetVisibility(false, false) end)
-    pcall(function() component:Deactivate() end)
+    local immediateOk = pcall(function() component:DeactivateImmediate() end)
+    if not immediateOk then
+        pcall(function() component:Deactivate() end)
+    end
     if #freeMarkers >= config.max_markers then
         destroyMarker(component)
         return

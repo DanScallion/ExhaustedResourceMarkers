@@ -11,12 +11,12 @@ return {
     -- light pillar the game uses for dropped items
     beam_effect_path = "/Game/Pal/Effect/MapObject/NS_MapObject_DroppedCharacter.NS_MapObject_DroppedCharacter",
     tree_beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- User.Scale for tree markers, x is the beam height
-    rock_beam_scale = { x = 0.6, y = 1.0, z = 1.0 }, -- shorter beam for rocks so they stand out from trees
+    rock_beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- same as trees, at 0.6 the beam fell apart into small particles
 
     foliage_alive_state = 0, -- 0 = alive, any other state (1 decaying, 2 dead) gets a marker
     spawner_match_distance_cm = 300, -- spawner with no map object this close coutns as mined
-    -- spawner classes with any of these in the name are ignored (chests, eggs, item piles, dungeon rewards)
-    spawner_class_excludes = { "TreasureBox", "PalEgg", "MultiItem", "RandomIncident", "Dungeon", "Supply" },
+    -- spawner classes with any of these in the name are ignored (chests, eggs, item piles, dungeon rewards, junk), not case sensitve
+    spawner_class_excludes = { "TreasureBox", "PalEgg", "MultiItem", "RandomIncident", "Dungeon", "Supply", "Junk" },
 
     poll_interval_ms = 250, -- how often the mod wakes up
     refresh_interval_ms = 2000, -- how often markers are worked out agian while shown
