@@ -1,7 +1,7 @@
 local UEHelpers = require("UEHelpers")
 local config = require("config")
 
-local MOD_VERSION = "0.3.0"
+local MOD_VERSION = "0.4.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_Z = 1.0009765625
@@ -103,6 +103,25 @@ local function containsAny(text, needles)
         end
     end
     return false
+end
+
+-- first type whose match string is in the name, or nil
+local function resolveType(name, types)
+    for _, entry in ipairs(types) do
+        if containsAny(name, entry.match) then
+            return entry
+        end
+    end
+    return nil
+end
+
+-- FoliageTypeId as text, ? if unreadable
+local function readFoliageTypeId(instance)
+    local ok, typeId = pcall(function() return instance.FoliageTypeId:ToString() end)
+    if not ok or type(typeId) ~= "string" then
+        return "?"
+    end
+    return typeId
 end
 
 local function actorLocation(actor)
@@ -213,13 +232,16 @@ local function getNiagaraLibrary()
     return library
 end
 
--- tree or rock scale from config, goes into User.Scale
-local function beamScaleFor(kind)
-    local scale = config.rock_beam_scale
-    if kind == "tree" then
-        scale = config.tree_beam_scale
+-- one User.Scale for every marker, from beam_scale
+local BEAM_SCALE = { X = config.beam_scale.x, Y = config.beam_scale.y, Z = config.beam_scale.z }
+
+-- colour sent to every name in color_parameter_names through both setters, a missing parameter is just ignored
+local function applyColor(component, color)
+    local linear = { R = color[1], G = color[2], B = color[3], A = 1.0 }
+    for _, name in ipairs(config.color_parameter_names) do
+        pcall(function() component:SetNiagaraVariableLinearColor(name, linear) end)
+        pcall(function() component:SetColorParameter(FName(name), linear) end)
     end
-    return { X = scale.x, Y = scale.y, Z = scale.z }
 end
 
 -- location rounded to 50 cm cells, so the same spot keeps the same marker between refreshes
@@ -238,9 +260,10 @@ local function destroyMarker(component)
     pcall(function() component:K2_DestroyComponent(component) end)
 end
 
--- User.Scale for trees or rocks, then visible
+-- User.Scale and colour for the resource, then visibel
 local function configureMarker(component, marker)
-    pcall(function() component:SetNiagaraVariableVec3("User.Scale", beamScaleFor(marker.kind)) end)
+    pcall(function() component:SetNiagaraVariableVec3("User.Scale", BEAM_SCALE) end)
+    applyColor(component, marker.resource.color)
     pcall(function() component:SetVisibility(true, false) end)
 end
 
@@ -358,10 +381,12 @@ local function newReport()
         mapObjectsTotal = 0,
         mapObjectsNearby = 0,
         states = {},
+        deadFoliageTypes = {},
         spawnerClasses = {},
+        unmatchedClasses = {},
         neighbourClasses = {},
-        trees = 0,
-        rocks = 0,
+        labels = {},
+        shown = 0,
         spawned = 0,
         wallMs = 0,
     }
@@ -444,7 +469,7 @@ local function sweepList(target, deadline, every, visit)
     return true
 end
 
--- only foliage within reach is kept, so later refreshes don't walk all of it agian
+-- only foliage within reach is kept, so later refreshes don't walk all of it again
 local function collectFoliageEntry(current, instance)
     local location = nil
     if isValid(instance) then
@@ -457,23 +482,30 @@ local function collectFoliageEntry(current, instance)
     if distanceSq2D(location, current.origin) > REACH_SQ then
         return
     end
-    current.foliage[#current.foliage + 1] = { object = instance, location = location }
-end
-
--- spawners matching spawner_class_excludes are skipped (chests, eggs, junk), not case sensitive
-local function collectSpawnerEntry(current, spawner)
-    if not isValid(spawner) then
+    local typeId = readFoliageTypeId(instance)
+    local resource = resolveType(typeId, config.foliage_types)
+    if resource == nil then
         return
     end
-    local name = className(spawner)
-    if containsAny(name, config.spawner_class_excludes) then
+    current.foliage[#current.foliage + 1] = { object = instance, location = location, typeId = typeId, resource = resource }
+end
+
+-- spawners not in resource_types are skipped (chests, eggs, junk)
+local function collectSpawnerEntry(current, spawner)
+    if not isValid(spawner) then
         return
     end
     local location = actorLocation(spawner)
     if location == nil or distanceSq2D(location, current.origin) > REACH_SQ then
         return
     end
-    current.spawners[#current.spawners + 1] = { object = spawner, location = location, className = name }
+    local name = className(spawner)
+    local resource = resolveType(name, config.resource_types)
+    if resource == nil then
+        countInto(current.report.unmatchedClasses, name)
+        return
+    end
+    current.spawners[#current.spawners + 1] = { object = spawner, location = location, className = name, resource = resource }
 end
 
 -- spawners are left out so a spawner never counts as its own rock
@@ -496,7 +528,7 @@ local function collectOccupant(current, object)
     current.report.mapObjectsNearby = current.report.mapObjectsNearby + 1
 end
 
--- anything not alive within the radius gets a tree marker
+-- anything not alive within the radius gets a marker
 local function evaluateTree(current, entry)
     local state = readFoliageState(entry.object)
     if state == nil then
@@ -510,7 +542,8 @@ local function evaluateTree(current, entry)
     if distanceSq > RADIUS_SQ then
         return
     end
-    current.markers[#current.markers + 1] = { kind = "tree", location = entry.location, distanceSq = distanceSq }
+    countInto(current.report.deadFoliageTypes, entry.typeId)
+    current.markers[#current.markers + 1] = { resource = entry.resource, location = entry.location, distanceSq = distanceSq }
 end
 
 -- no map object within spawner_match_distance_cm of the spawner, so the rock was mined
@@ -529,22 +562,19 @@ local function evaluateRock(current, entry)
         return
     end
     classStats.exhausted = classStats.exhausted + 1
-    current.markers[#current.markers + 1] = { kind = "rock", location = entry.location, distanceSq = distanceSq }
+    current.markers[#current.markers + 1] = { resource = entry.resource, location = entry.location, distanceSq = distanceSq }
 end
 
--- closest max_markers spots, counted as trees or rocks for the chat line
+-- closest max_markers spots, the key has the label in it so a tree and a rock on one spot both show
 local function selectMarkers(current)
     local markers = current.markers
     table.sort(markers, function(a, b) return a.distanceSq < b.distanceSq end)
     local wanted = {}
     for index = 1, math.min(#markers, config.max_markers) do
         local marker = markers[index]
-        wanted[markerKey(marker.location)] = marker
-        if marker.kind == "tree" then
-            current.report.trees = current.report.trees + 1
-        else
-            current.report.rocks = current.report.rocks + 1
-        end
+        wanted[markerKey(marker.location) .. ":" .. marker.resource.label] = marker
+        countInto(current.report.labels, marker.resource.label)
+        current.report.shown = current.report.shown + 1
     end
     return wanted
 end
@@ -599,7 +629,7 @@ local function logProperties()
     end
 end
 
--- diag lines, the detailed ones only once per session unless the cache was rebuilt
+-- diag lines, the detailed ones only once per session unless the cache was rebiult
 local function logReport(report)
     if not config.diagnostics then
         return
@@ -615,11 +645,13 @@ local function logReport(report)
     end
     diagnosticsLogged = true
     log("diag foliage states within reach: " .. formatCounts(report.states))
+    log("diag dead foliage type ids: " .. formatCounts(report.deadFoliageTypes))
     log("diag spawner classes within radius (exhausted/total): " .. formatCounts(report.spawnerClasses))
+    log("diag unlisted spawner classes within reach (ignored): " .. formatCounts(report.unmatchedClasses))
     log("diag map objects occupying spawners: " .. formatCounts(report.neighbourClasses)
         .. " (map objects in memory " .. report.mapObjectsTotal .. ", within reach " .. report.mapObjectsNearby .. ")")
-    log(string.format("diag refresh took %.1f ms wall over %d slice(s); markers: %d trees, %d rocks, %d newly shown",
-        report.wallMs, report.slices, report.trees, report.rocks, report.spawned))
+    log(string.format("diag refresh took %.1f ms wall over %d slice(s); markers: %s; %d newly shown",
+        report.wallMs, report.slices, formatCounts(report.labels), report.spawned))
     logProperties()
 end
 
@@ -737,8 +769,7 @@ local STAGES = {
             return true
         end
         announceNextResult = false
-        say(string.format("Exhausted within %d m: %d trees, %d rocks",
-            config.radius_meters, current.report.trees, current.report.rocks))
+        say(string.format("Exhausted within %d m: %s", config.radius_meters, formatCounts(current.report.labels)))
         return true
     end,
 }
@@ -848,6 +879,38 @@ local function updateBuildMode()
     end
 end
 
+-- diag only, user parameters of an effect (that's how User.Color was found)
+local function userParameterNames(asset)
+    local names = {}
+    local ok, err = pcall(function()
+        asset.ExposedParameters.SortedParameterOffsets:ForEach(function(_, element)
+            local variable = element:get()
+            names[#names + 1] = variable.Name:ToString()
+        end)
+    end)
+    if not ok then
+        return "unreadable (" .. tostring(err) .. ")"
+    end
+    if #names == 0 then
+        return "(none)"
+    end
+    return table.concat(names, ", ")
+end
+
+local function logEffectParameters()
+    if not config.diagnostics then
+        return
+    end
+    for _, path in ipairs(config.diagnostic_effect_paths) do
+        local ok, asset = pcall(LoadAsset, path)
+        if not ok or not isValid(asset) then
+            log("diag effect " .. path .. " could not be loaded")
+        else
+            log("diag effect " .. path .. " user parameters: " .. userParameterNames(asset))
+        end
+    end
+end
+
 -- player gone (menu, loading), the markers went with the world so the references are just droped
 local function endSession()
     if not sessionReady then
@@ -864,7 +927,7 @@ local function endSession()
     log("session ended, markers dropped")
 end
 
--- first tick with a player, removes markers left from a hot relaod
+-- first tick with a player, removes markers left from a hot reload
 local function beginSession()
     if sessionReady then
         return
@@ -872,6 +935,7 @@ local function beginSession()
     sessionReady = true
     diagnosticsLogged = false
     sweepLeftoverMarkers()
+    logEffectParameters()
     log("session started")
 end
 

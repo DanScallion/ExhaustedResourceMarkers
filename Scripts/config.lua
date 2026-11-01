@@ -6,17 +6,51 @@ return {
     radius_meters = 50, -- how far around the player in metres
     max_markers = 300, -- most markers at once, the closest ones win
     show_trees = true,
-    show_rocks = true, -- rocks and ores, from map object spawners
+    show_rocks = true, -- rocks, ores and the other spawner resources below
 
     -- light pillar the game uses for dropped items
     beam_effect_path = "/Game/Pal/Effect/MapObject/NS_MapObject_DroppedCharacter.NS_MapObject_DroppedCharacter",
-    tree_beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- User.Scale for tree markers, x is the beam height
-    rock_beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- same as trees, at 0.6 the beam fell apart into small particles
+    beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- User.Scale for every marker
+    -- guesed names for the colour parameter, the colour is written to all of them
+    color_parameter_names = {
+        "User.Color", "User.BaseColor", "User.LinearColor", "User.Tint", "User.TintColor",
+        "User.BeamColor", "User.GlowColor", "User.EmissiveColor", "User.ParticleColor", "Color",
+    },
+    -- only read when diagnostics = true, logs which user parameters each effect has
+    diagnostic_effect_paths = {
+        "/Game/Pal/Effect/MapObject/NS_MapObject_DroppedCharacter.NS_MapObject_DroppedCharacter",
+        "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight",
+        "/Game/Pal/Effect/Common/Glow/NS_ItemPickupTower_Glow.NS_ItemPickupTower_Glow",
+    },
+
+    -- trees and other foliage, first match on the FoliageTypeId wins, "" matches everyting
+    -- color = { red, green, blue } from 0 to 1
+    foliage_types = {
+        { label = "mushroom", match = { "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
+        { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 } },
+    },
+
+    -- rocks, ores and other respawning spawners, first match on the spawner class name wins (not case sensitive) so the more specific names go frist
+    -- ONLY LISTED SPAWNERS GET MARKERS, CHESTS ARE "Treasure_" NOT "TreasureBox" SO THE OLD EXCLUDE LIST MARKED THEM
+    resource_types = {
+        { label = "sulfur", match = { "Sulfur" }, color = { 1.0, 0.9, 0.0 } },
+        { label = "coal", match = { "RockCoal" }, color = { 0.3, 0.3, 0.35 } },
+        { label = "ore", match = { "RockCopper" }, color = { 1.0, 0.45, 0.1 } },
+        { label = "iron", match = { "RockIron" }, color = { 0.85, 0.2, 0.1 } },
+        { label = "quartz", match = { "RockQuartz" }, color = { 0.75, 1.0, 1.0 } },
+        { label = "paldium", match = { "PalCrystal" }, color = { 0.1, 0.45, 1.0 } }, -- has to stay above crystal, PalCrystal contains Crystal
+        { label = "crystal", match = { "Crystal" }, color = { 0.7, 0.2, 1.0 } },
+        { label = "nightstone", match = { "NightStone" }, color = { 0.45, 0.1, 0.8 } },
+        { label = "rare ore", match = { "SkyIslandOre", "WorldTreeOre" }, color = { 1.0, 0.2, 0.85 } },
+        { label = "stone", match = { "RockStone", "SmallStone", "DamagableRock", "DestroyableWall_Rock" }, color = { 0.6, 0.6, 0.6 } },
+        { label = "wood", match = { "TreeYakushima", "DamagableWood" }, color = { 0.1, 1.0, 0.1 } },
+        { label = "log", match = { "_log" }, color = { 0.55, 0.3, 0.1 } }, -- underscore so only the log spawner matches
+        { label = "bone", match = { "_bone" }, color = { 1.0, 0.95, 0.8 } },
+        { label = "plant", match = { "RedBerry", "AffectionFruit", "SkillFruits", "Lotus", "Poppy", "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
+    },
 
     foliage_alive_state = 0, -- 0 = alive, any other state (1 decaying, 2 dead) gets a marker
     spawner_match_distance_cm = 300, -- spawner with no map object this close coutns as mined
-    -- spawner classes with any of these in the name are ignored (chests, eggs, item piles, dungeon rewards, junk), not case sensitve
-    spawner_class_excludes = { "TreasureBox", "PalEgg", "MultiItem", "RandomIncident", "Dungeon", "Supply", "Junk" },
 
     poll_interval_ms = 250, -- how often the mod wakes up
     refresh_interval_ms = 2000, -- how often markers are worked out agian while shown
