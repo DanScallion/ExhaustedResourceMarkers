@@ -8,14 +8,10 @@ return {
     show_trees = true,
     show_rocks = true, -- rocks, ores and the other spawner resources below
 
-    -- light pillar the game uses for dropped items
-    beam_effect_path = "/Game/Pal/Effect/MapObject/NS_MapObject_DroppedCharacter.NS_MapObject_DroppedCharacter",
+    -- treasure light, the old blue beam (DroppedCharacter) has no colour parameter so it can't be tinted
+    beam_effect_path = "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight",
     beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- User.Scale for every marker
-    -- guesed names for the colour parameter, the colour is written to all of them
-    color_parameter_names = {
-        "User.Color", "User.BaseColor", "User.LinearColor", "User.Tint", "User.TintColor",
-        "User.BeamColor", "User.GlowColor", "User.EmissiveColor", "User.ParticleColor", "Color",
-    },
+    color_parameter_names = { "User.Color" }, -- user parameter that gets the colour, found wiht the diag effect lines
     -- only read when diagnostics = true, logs which user parameters each effect has
     diagnostic_effect_paths = {
         "/Game/Pal/Effect/MapObject/NS_MapObject_DroppedCharacter.NS_MapObject_DroppedCharacter",

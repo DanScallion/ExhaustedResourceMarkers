@@ -1,7 +1,7 @@
 local UEHelpers = require("UEHelpers")
 local config = require("config")
 
-local MOD_VERSION = "0.4.0"
+local MOD_VERSION = "0.5.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_Z = 1.0009765625
