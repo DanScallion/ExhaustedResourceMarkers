@@ -1,7 +1,7 @@
 local UEHelpers = require("UEHelpers")
 local config = require("config")
 
-local MOD_VERSION = "0.5.0"
+local MOD_VERSION = "0.6.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_Z = 1.0009765625
@@ -232,8 +232,11 @@ local function getNiagaraLibrary()
     return library
 end
 
--- one User.Scale for every marker, from beam_scale
-local BEAM_SCALE = { X = config.beam_scale.x, Y = config.beam_scale.y, Z = config.beam_scale.z }
+-- the types own scale if it has one, otherwise beam_scale, goes into User.Scale
+local function beamScaleFor(resource)
+    local scale = resource.scale or config.beam_scale
+    return { X = scale.x, Y = scale.y, Z = scale.z }
+end
 
 -- colour sent to every name in color_parameter_names through both setters, a missing parameter is just ignored
 local function applyColor(component, color)
@@ -260,9 +263,9 @@ local function destroyMarker(component)
     pcall(function() component:K2_DestroyComponent(component) end)
 end
 
--- User.Scale and colour for the resource, then visibel
+-- User.Scale and colour for the resource, then visible
 local function configureMarker(component, marker)
-    pcall(function() component:SetNiagaraVariableVec3("User.Scale", BEAM_SCALE) end)
+    pcall(function() component:SetNiagaraVariableVec3("User.Scale", beamScaleFor(marker.resource)) end)
     applyColor(component, marker.resource.color)
     pcall(function() component:SetVisibility(true, false) end)
 end
