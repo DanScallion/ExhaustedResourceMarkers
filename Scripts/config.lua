@@ -3,7 +3,7 @@ return {
     toggle_modifiers = {}, -- e.g. { "CONTROL" } or { "SHIFT", "ALT" }, empty = key on its own
     show_in_build_mode = true, -- markers also show while the build menu is open, even with F9 off
 
-    radius_meters = 50, -- how far around the player in metres
+    radius_meters = 50, -- how far around the player, 5 to 300
     max_markers = 300, -- most markers at once, the closest ones win
     show_trees = true,
     show_rocks = true, -- rocks, ores and the other spawner resources below
@@ -55,5 +55,5 @@ return {
     cache_rebuild_interval_ms = 60000, -- rebuild anyway after this long, so newly loaded trees and rocks get picked up
 
     chat_messages = true, -- chat line when pressing the hotkey
-    diagnostics = true, -- extra diag lines in UE4SS.log, on while the mod is still being tested
+    diagnostics = false, -- extra diag lines in UE4SS.log, for bug reprots
 }
