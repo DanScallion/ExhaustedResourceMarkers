@@ -1,5 +1,7 @@
-local MOD_VERSION = "0.7.0"
+local MOD_VERSION = "0.8.0"
 local TAG = "[ExhaustedResourceMarkers] "
+-- exact float only this mod uses as x scale, so markers left from an earlier load can be recognised and removed
+local MARKER_SCALE_X = 1.0009765625
 
 local function log(message)
     pcall(print, TAG .. tostring(message) .. "\n")
@@ -104,7 +106,7 @@ local function normalizeMatch(match)
     return lowered
 end
 
--- each type entry turned into what the marker code needs, broken entries are skipped with a log line
+-- each type entry turned into what the marker code needs, broken entries are skipped wiht a log line
 local function normalizeTypes(list, listName, defaultScale)
     local result = {}
     if type(list) ~= "table" then
@@ -116,11 +118,16 @@ local function normalizeTypes(list, listName, defaultScale)
         if match == nil or color == nil then
             log("config: " .. listName .. "[" .. index .. "] ignored (needs match strings and a 3-number color)")
         else
+            local height = 1.0
+            if isFiniteNumber(entry.height) and entry.height > 0 then
+                height = clamp(entry.height, 0.1, 50)
+            end
             result[#result + 1] = {
                 label = type(entry.label) == "string" and entry.label or ("type" .. index),
                 match = match,
                 color = color,
                 scale = normalizeScale(entry.scale, defaultScale),
+                componentScale = { X = MARKER_SCALE_X, Y = 1.0, Z = height }, -- x is the leftover fingerprint, z the height
             }
         end
     end
@@ -181,10 +188,6 @@ end
 
 local config = loadConfig()
 
--- exact float only this mod uses as z scale, so markers left from an earlier load can be recognised and removed
-local MARKER_SCALE_Z = 1.0009765625
--- every marker spawns with the fingerprint scale
-local MARKER_SPAWN_SCALE = { X = 1, Y = 1, Z = MARKER_SCALE_Z }
 local ZERO_ROTATION = { Pitch = 0, Yaw = 0, Roll = 0 }
 local KEY_CELL_CM = 50 -- markers closer than this share a kye
 local GRID_STRIDE = 1048576 -- packs grid cell x and y into one number, so no strings are built per lookup
@@ -534,9 +537,13 @@ local function callMove(component, vector)
     component:K2_SetWorldLocation(vector, false, {}, true)
 end
 
--- false = no auto destroy (pooled), true = activate now, 0 = no niagara pooling, false = no pre-cull so it allways spawns
-local function callSpawn(library, world, asset, vector)
-    return library:SpawnSystemAtLocation(world, asset, vector, ZERO_ROTATION, MARKER_SPAWN_SCALE, false, true, 0, false)
+local function callSetScale(component, scale)
+    component:SetRelativeScale3D(scale)
+end
+
+-- false = no auto destroy (pooled), true = activate now, 0 = no niagara pooling, false = no pre-cull so it always spawns
+local function callSpawn(library, world, asset, vector, scale)
+    return library:SpawnSystemAtLocation(world, asset, vector, ZERO_ROTATION, scale, false, true, 0, false)
 end
 
 -- location rounded to 50 cm cells plus the label, so the same spot keeps the same marker between refershes
@@ -554,8 +561,9 @@ local function destroyMarker(component)
     pcall(callDestroy, component)
 end
 
--- User.Scale and colour from the type entry, then visible
+-- component z scale stretches the light upwards, User.Scale alone barely did anyting on this effect
 local function configureMarker(component, resource)
+    pcall(callSetScale, component, resource.componentScale)
     pcall(callSetVec3, component, "User.Scale", resource.scale)
     for _, name in ipairs(config.color_parameter_names) do
         pcall(callSetColor, component, name, resource.color)
@@ -573,7 +581,7 @@ local function spawnMarker(world, marker)
     if library == nil or asset == nil then
         return nil
     end
-    local ok, component = pcall(callSpawn, library, world, asset, marker.vector)
+    local ok, component = pcall(callSpawn, library, world, asset, marker.vector, marker.resource.componentScale)
     if ok and isValid(component) then
         spawnFailures = 0
         return component
@@ -630,18 +638,18 @@ local function hideAllMarkers()
     end
 end
 
-local function readScaleZ(component)
-    return component.RelativeScale3D.Z
+local function readScaleX(component)
+    return component.RelativeScale3D.X
 end
 
 local function readAssetName(component)
     return component:GetAsset():GetFullName()
 end
 
--- marker from before a hot reload, found by the z scale fingerprint and the effect name
+-- marker from before a hot reload, found by the x scale fingerprint and the effect name
 local function isLeftoverMarker(component)
-    local scaleOk, scaleZ = pcall(readScaleZ, component)
-    if not scaleOk or scaleZ ~= MARKER_SCALE_Z then
+    local scaleOk, scaleX = pcall(readScaleX, component)
+    if not scaleOk or scaleX ~= MARKER_SCALE_X then
         return false
     end
     local assetOk, assetName = pcall(readAssetName, component)
