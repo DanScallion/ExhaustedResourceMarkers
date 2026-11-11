@@ -1,4 +1,4 @@
-local MOD_VERSION = "0.8.0"
+local MOD_VERSION = "0.9.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as x scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_X = 1.0009765625
@@ -106,7 +106,7 @@ local function normalizeMatch(match)
     return lowered
 end
 
--- each type entry turned into what the marker code needs, broken entries are skipped wiht a log line
+-- each type entry turned into what the marker code needs, broken entries are skiped with a log line
 local function normalizeTypes(list, listName, defaultScale)
     local result = {}
     if type(list) ~= "table" then
@@ -122,12 +122,22 @@ local function normalizeTypes(list, listName, defaultScale)
             if isFiniteNumber(entry.height) and entry.height > 0 then
                 height = clamp(entry.height, 0.1, 50)
             end
+            local stack = 1
+            if isFiniteNumber(entry.stack) then
+                stack = math.floor(clamp(entry.stack, 1, 10))
+            end
+            local stackStep = 300
+            if isFiniteNumber(entry.stack_step_cm) then
+                stackStep = clamp(entry.stack_step_cm, 10, 5000)
+            end
             result[#result + 1] = {
                 label = type(entry.label) == "string" and entry.label or ("type" .. index),
                 match = match,
                 color = color,
                 scale = normalizeScale(entry.scale, defaultScale),
                 componentScale = { X = MARKER_SCALE_X, Y = 1.0, Z = height }, -- x is the leftover fingerprint, z the height
+                stack = stack,
+                stackStep = stackStep,
             }
         end
     end
@@ -906,6 +916,27 @@ local function byDistance(a, b)
     return a.distanceSq < b.distanceSq
 end
 
+-- stacked lights for one spot, built once and kept on the entry, one light is about 80 cm high
+local function piecesOf(entry)
+    local pieces = entry.pieces
+    if pieces ~= nil then
+        return pieces
+    end
+    pieces = {}
+    local resource = entry.resource
+    local location = entry.location
+    local baseKey = markerKey(location, resource.label)
+    for level = 0, resource.stack - 1 do
+        pieces[#pieces + 1] = {
+            key = baseKey .. ":" .. level,
+            resource = resource,
+            vector = { X = location.x, Y = location.y, Z = location.z + level * resource.stackStep },
+        }
+    end
+    entry.pieces = pieces
+    return pieces
+end
+
 -- only sorted when there are more spots than max_markers, so the closest ones win
 local function selectMarkers(current)
     local markers = current.markers
@@ -915,7 +946,11 @@ local function selectMarkers(current)
     local wanted = {}
     for index = 1, math.min(#markers, config.max_markers) do
         local marker = markers[index]
-        wanted[markerKey(marker.location, marker.resource.label)] = marker
+        local pieces = piecesOf(marker)
+        for pieceIndex = 1, #pieces do
+            local piece = pieces[pieceIndex]
+            wanted[piece.key] = piece
+        end
         countInto(current.report.labels, marker.resource.label)
     end
     return wanted

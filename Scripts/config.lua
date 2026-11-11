@@ -4,13 +4,13 @@ return {
     show_in_build_mode = true, -- markers also show while the build menu is open, even with F9 off
 
     radius_meters = 50, -- how far around the player, 5 to 300
-    max_markers = 300, -- most markers at once, the closest ones win
+    max_markers = 300, -- most spots markd at once, closest win, a stack of tree lights counts as one
     show_trees = true,
     show_rocks = true, -- rocks, ores and the other spawner resources below
 
     -- treasure light, the old blue beam (DroppedCharacter) has no colour parameter so it can't be tinted
     beam_effect_path = "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight",
-    beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- effects own User.Scale, barely changes this light, use height for size
+    beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- effects own User.Scale, barly changes this light, use height and stack for size
     color_parameter_names = { "User.Color" }, -- user parameter that gets the colour, found wiht the diag effect lines
     -- only read when diagnostics = true, logs which user parameters each effect has
     diagnostic_effect_paths = {
@@ -20,10 +20,10 @@ return {
     },
 
     -- trees and other foliage, first match on the FoliageTypeId wins, "" matches everyting
-    -- color = { red, green, blue } from 0 to 1, height = how tall one light is strecthed (component z scale)
+    -- color = { red, green, blue } from 0 to 1, height = how tall one light is stretched, stack = lights on top of each other (1 to 10), stack_step_cm = distance between them
     foliage_types = {
         { label = "mushroom", match = { "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
-        { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 }, height = 5.0 },
+        { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 5, stack_step_cm = 250 },
     },
 
     -- rocks, ores and other respawning spawners, first match on the spawner class name wins (not case sensitive) so the more specific names go frist
@@ -39,7 +39,7 @@ return {
         { label = "nightstone", match = { "NightStone" }, color = { 0.45, 0.1, 0.8 } },
         { label = "rare ore", match = { "SkyIslandOre", "WorldTreeOre" }, color = { 1.0, 0.2, 0.85 } },
         { label = "stone", match = { "RockStone", "SmallStone", "DamagableRock", "DestroyableWall_Rock" }, color = { 0.6, 0.6, 0.6 } },
-        { label = "wood", match = { "TreeYakushima", "DamagableWood" }, color = { 0.1, 1.0, 0.1 }, height = 5.0 },
+        { label = "wood", match = { "TreeYakushima", "DamagableWood" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 5, stack_step_cm = 250 },
         { label = "log", match = { "_log" }, color = { 0.55, 0.3, 0.1 } }, -- underscore so only the log spawner matches
         { label = "bone", match = { "_bone" }, color = { 1.0, 0.95, 0.8 } },
         { label = "plant", match = { "RedBerry", "AffectionFruit", "SkillFruits", "Lotus", "Poppy", "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
