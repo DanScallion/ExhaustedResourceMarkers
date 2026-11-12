@@ -23,7 +23,7 @@ return {
     -- color = { red, green, blue } from 0 to 1, height = how tall one light is stretched, stack = lights on top of each other (1 to 10), stack_step_cm = distance between them
     foliage_types = {
         { label = "mushroom", match = { "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
-        { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 5, stack_step_cm = 250 },
+        { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 10, stack_step_cm = 125 },
     },
 
     -- rocks, ores and other respawning spawners, first match on the spawner class name wins (not case sensitive) so the more specific names go frist
@@ -39,7 +39,7 @@ return {
         { label = "nightstone", match = { "NightStone" }, color = { 0.45, 0.1, 0.8 } },
         { label = "rare ore", match = { "SkyIslandOre", "WorldTreeOre" }, color = { 1.0, 0.2, 0.85 } },
         { label = "stone", match = { "RockStone", "SmallStone", "DamagableRock", "DestroyableWall_Rock" }, color = { 0.6, 0.6, 0.6 } },
-        { label = "wood", match = { "TreeYakushima", "DamagableWood" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 5, stack_step_cm = 250 },
+        { label = "wood", match = { "TreeYakushima", "DamagableWood" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 10, stack_step_cm = 125 },
         { label = "log", match = { "_log" }, color = { 0.55, 0.3, 0.1 } }, -- underscore so only the log spawner matches
         { label = "bone", match = { "_bone" }, color = { 1.0, 0.95, 0.8 } },
         { label = "plant", match = { "RedBerry", "AffectionFruit", "SkillFruits", "Lotus", "Poppy", "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
