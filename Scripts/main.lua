@@ -1,4 +1,4 @@
-local MOD_VERSION = "1.0.0"
+local MOD_VERSION = "1.1.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as x scale, so markers left from an earlier load can be recognised and removed
 local MARKER_SCALE_X = 1.0009765625
@@ -206,16 +206,19 @@ local SPAWN_CLOCK_CHECK_EVERY = 4 -- spawning is slower, so the clock is checked
 local MAX_CONSECUTIVE_FAILURES = 10 -- this many errors in a row switch the mod off until restart
 local MAX_SPAWN_FAILURES = 3
 local RETRY_BACKOFF_MS = 10000 -- wait before trying a failed spawn or asset load agian
-local RADIUS_CM = config.radius_meters * 100
-local RADIUS_SQ = RADIUS_CM * RADIUS_CM
-local CACHE_MARGIN_CM = config.cache_margin_meters * 100
-local CACHE_MARGIN_SQ = CACHE_MARGIN_CM * CACHE_MARGIN_CM
--- cache keeps a bit more than the radius, so walking arround doesn't rebuild it every refresh
-local REACH_SQ = (RADIUS_CM + CACHE_MARGIN_CM) * (RADIUS_CM + CACHE_MARGIN_CM)
-local MATCH_CM = config.spawner_match_distance_cm
-local MATCH_SQ = MATCH_CM * MATCH_CM
+local RADIUS_SQ, CACHE_MARGIN_SQ, REACH_SQ, MATCH_CM, MATCH_SQ
+local function updateScanDistances()
+    local radius = config.radius_meters * 100
+    local margin = config.cache_margin_meters * 100
+    RADIUS_SQ = radius * radius
+    CACHE_MARGIN_SQ = margin * margin
+    -- Keep a margin around the radius so that small movements can reuse the cache.
+    REACH_SQ = (radius + margin) * (radius + margin)
+    MATCH_CM = config.spawner_match_distance_cm
+    MATCH_SQ = MATCH_CM * MATCH_CM
+end
+updateScanDistances()
 local BEAM_ASSET_NAME = config.beam_effect_path:match("%.([^%.]+)$") or config.beam_effect_path
-local DIAGNOSTICS = config.diagnostics
 
 local hotkeyOn = false
 local buildModeOn = false
@@ -246,6 +249,7 @@ local spawnBlockedUntil = 0
 local consecutiveFailures = 0
 local errorCounts = {}
 local tickPending = false
+local nextTickAt = -math.huge
 local diagnosticsLogged = false
 local propertiesLogged = false
 local effectsLogged = false
@@ -830,7 +834,7 @@ local function collectSpawnerEntry(current, spawner)
     local name = className(spawner)
     local resource = resolveType(name, config.resource_types, spawnerTypeMemo)
     if resource == nil then
-        if DIAGNOSTICS then
+        if config.diagnostics then
             countInto(current.report.unmatchedClasses, name)
         end
         return
@@ -868,7 +872,7 @@ local function evaluateTree(current, entry)
     if state == nil then
         return
     end
-    if DIAGNOSTICS then
+    if config.diagnostics then
         countInto(current.report.states, state)
     end
     if state == config.foliage_alive_state then
@@ -878,7 +882,7 @@ local function evaluateTree(current, entry)
     if distanceSq > RADIUS_SQ then
         return
     end
-    if DIAGNOSTICS then
+    if config.diagnostics then
         countInto(current.report.deadFoliageTypes, entry.typeId)
     end
     current.markers[#current.markers + 1] = entry
@@ -893,14 +897,14 @@ local function evaluateRock(current, entry)
     end
     local report = current.report
     local classStats = nil
-    if DIAGNOSTICS then
+    if config.diagnostics then
         classStats = report.spawnerClasses[entry.className] or { total = 0, exhausted = 0 }
         classStats.total = classStats.total + 1
         report.spawnerClasses[entry.className] = classStats
     end
     local occupant, occupantSq = nearestOccupant(current.grid, entry.location)
     if occupant ~= nil and occupantSq <= MATCH_SQ then
-        if DIAGNOSTICS then
+        if config.diagnostics then
             countInto(report.neighbourClasses, occupant.className)
         end
         return
@@ -1008,7 +1012,7 @@ local function logProperties()
 end
 
 local function logReport(report)
-    if not DIAGNOSTICS then
+    if not config.diagnostics then
         return
     end
     if report.cacheRebuilt then
@@ -1261,7 +1265,7 @@ local function updateBuildMode()
         return
     end
     buildModeOn = current
-    if DIAGNOSTICS then
+    if config.diagnostics then
         log("diag build mode " .. (current and "entered" or "left"))
     end
 end
@@ -1274,7 +1278,7 @@ local function collectUserParameters(asset, names)
 end
 
 local function logEffectParameters()
-    if not DIAGNOSTICS or effectsLogged then
+    if not config.diagnostics or effectsLogged then
         return
     end
     effectsLogged = true
@@ -1455,10 +1459,84 @@ local function registerHotkey()
     log("toggle key: " .. label .. config.toggle_key)
 end
 
+local function clearMarkerEffects()
+    for _, component in pairs(activeMarkers) do destroyMarker(component) end
+    for _, component in ipairs(freeMarkers) do destroyMarker(component) end
+    activeMarkers, freeMarkers = {}, {}
+end
+
+local function applySetting(key, value)
+    local axis = key:match("^beam_scale%.([xyz])$")
+    if axis then
+        if not isFiniteNumber(value) then return end
+        axis = axis:upper()
+        value = clamp(value, 0.05, 50)
+        if config.beam_scale[axis] == value then return end
+        config.beam_scale[axis] = value
+        hideAllMarkers()
+    elseif key == "color_parameter_names" then
+        if type(value) ~= "string" then return end
+        local names = {}
+        for part in value:gmatch("[^,]+") do
+            local name = part:match("^%s*(.-)%s*$")
+            if name ~= "" then names[#names + 1] = name end
+        end
+        if table.concat(names, "\0") == table.concat(config.color_parameter_names, "\0") then return end
+        config.color_parameter_names = names
+        clearMarkerEffects()
+    else
+        if type(value) ~= type(config[key]) or config[key] == value then return end
+        if type(value) == "number" then
+            if not isFiniteNumber(value) then return end
+            local range = LIMITS[key]
+            if range then value = clamp(value, range[1], range[2]) end
+            if key == "max_markers" or key == "radius_meters" or key == "foliage_alive_state" then
+                value = math.floor(value)
+            end
+        end
+        if key == "beam_effect_path" and value == "" then return end
+        config[key] = value
+    end
+
+    nextTickAt = -math.huge
+    if key == "poll_interval_ms" or key == "refresh_interval_ms" or key == "scan_budget_ms"
+        or key == "chat_messages" or key == "toggle_key" or key == "cache_rebuild_interval_ms" then return end
+
+    if key == "radius_meters" or key == "cache_margin_meters" or key == "spawner_match_distance_cm" then
+        updateScanDistances()
+        cache = nil
+    elseif key == "show_trees" or key == "show_rocks" then
+        cache = nil
+    elseif key == "beam_effect_path" then
+        clearMarkerEffects()
+        BEAM_ASSET_NAME = value:match("%.([^%.]+)$") or value
+        beamAsset, assetRetryAt, spawnFailures, spawnBlockedUntil = nil, 0, 0, 0
+    elseif key == "max_markers" then
+        while #freeMarkers > value do destroyMarker(table.remove(freeMarkers)) end
+    elseif key == "diagnostics" and value then
+        diagnosticsLogged, propertiesLogged, effectsLogged = false, false, false
+        if sessionReady then logEffectParameters() end
+    end
+    job = nil
+    forceRefresh = true
+end
+
+local nativeHotkey = false
+local hasMenu, managesHotkey = require("marker_settings")(config, LIMITS, log, applySetting, function()
+    if nativeHotkey then runToggle() end
+end)
+nativeHotkey = managesHotkey
+if not nativeHotkey then registerHotkey() end
+
 -- LoopAsync thread, only queues a game thread tick once the last one ran, so they can't pile up on a slow frmae
 local function onLoop()
     if tickPending or disabled then
         return false
+    end
+    if hasMenu then
+        local time = now()
+        if time < nextTickAt then return false end
+        nextTickAt = time + config.poll_interval_ms
     end
     tickPending = true
     if not pcall(ExecuteInGameThread, runTick) then
@@ -1467,9 +1545,8 @@ local function onLoop()
     return false
 end
 
-registerHotkey()
-
-local loopOk, loopErr = pcall(LoopAsync, config.poll_interval_ms, onLoop)
+-- With the menu active, the loop wakes at the shortest supported interval and queues scans at the configured rate.
+local loopOk, loopErr = pcall(LoopAsync, hasMenu and LIMITS.poll_interval_ms[1] or config.poll_interval_ms, onLoop)
 if not loopOk then
     log("could not start the update loop, mod inactive: " .. tostring(loopErr))
 end

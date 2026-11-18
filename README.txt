@@ -1,3 +1,5 @@
+Exhausted Resource Markers - 1.1.0
+
 Are you tired of not knowing if you build over tree or rocks or iron or other resources? I was, so I made this simple mod to show markers, either press F9 or try to build something, it will show markers for every type of resource. This way you can avoid building over resources and blocking their respawn, and my goldfish memory is too bad to remember where is what.
 
 
@@ -55,7 +57,13 @@ Colours:
 SETTINGS
 --------
 
-Scripts\config.lua holds configs, edit it with notepad or preferable notepad++, game will need restart thought.
+Better Mod Manager is optional. In Better Mod Manager, open Supported >
+Exhausted Resource Markers to change the hotkey, marker visibility, scan
+settings, and effects during the current session.
+
+Without Better Mod Manager, edit Scripts\config.lua and restart Palworld.
+Hotkey modifiers and per-resource matching rules and colors are configured
+in that file. A modifier-based hotkey keeps using the binding from the file.
 
   toggle_key          hotkey (default "F9")
   show_in_build_mode  true/false - show markers automatically in the build menu
@@ -86,7 +94,8 @@ or delete just enabled.txt to switch it off while keeping your settings.
 BUG REPORTS
 -----------
 
-Set diagnostics to true in config.lua, reproduce the problem, then send the lines
+Enable Diagnostics in Better Mod Manager or set diagnostics to true in config.lua.
+Reproduce the problem, then send the lines
 starting with [ExhaustedResourceMarkers] from UE4SS.log to me, this will help immensely with debugging it and fixing stuff.
 
 Full source on for version control or if I go missing or get kidnapped by aliens and mod stops working: https://github.com/DanScallion/ExhaustedResourceMarkers
