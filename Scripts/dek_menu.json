@@ -1,0 +1,237 @@
+{
+  "meta": {
+    "game": true,
+    "vers": "1.2.0",
+    "auth": "DanScallion",
+    "desc": "Settings for Exhausted Resource Markers. The hotkey is configured in config.lua or Better Mod Manager. Better Mod Manager takes priority when it is active. In that case, change these settings in Better Mod Manager. When Dek is in charge, Save applies changes in the current session."
+  },
+  "show_in_build_mode": {
+    "type": "boolean",
+    "name": "Show in Build Mode",
+    "desc": "Show markers automatically while building.",
+    "init": true,
+    "live": true
+  },
+  "show_trees": {
+    "type": "boolean",
+    "name": "Show Trees and Foliage",
+    "desc": "Include exhausted trees and other listed foliage.",
+    "init": true,
+    "live": true
+  },
+  "show_rocks": {
+    "type": "boolean",
+    "name": "Show Rocks, Ores, and Other Resources",
+    "desc": "Include exhausted rocks, ores, and other listed resources.",
+    "init": true,
+    "live": true
+  },
+  "chat_messages": {
+    "type": "boolean",
+    "name": "Show Chat Messages",
+    "desc": "Show chat messages when toggling markers.",
+    "init": true,
+    "live": true
+  },
+  "radius_meters": {
+    "type": "integer",
+    "name": "Marker Radius (m)",
+    "desc": "Distance around the player to check for exhausted resources.",
+    "init": 50,
+    "live": 50,
+    "opts": {
+      "min": 5,
+      "max": 300,
+      "step": 1
+    }
+  },
+  "max_markers": {
+    "type": "integer",
+    "name": "Maximum Markers",
+    "desc": "Maximum visible markers. Closest resources are shown first.",
+    "init": 300,
+    "live": 300,
+    "opts": {
+      "min": 1,
+      "max": 1000,
+      "step": 1
+    }
+  },
+  "poll_interval_ms": {
+    "type": "integer",
+    "name": "Update Interval (ms)",
+    "desc": "How often the mod checks for work.",
+    "init": 250,
+    "live": 250,
+    "opts": {
+      "min": 50,
+      "max": 5000,
+      "step": 50
+    }
+  },
+  "refresh_interval_ms": {
+    "type": "integer",
+    "name": "Refresh Interval (ms)",
+    "desc": "How long to wait between marker refreshes.",
+    "init": 2000,
+    "live": 2000,
+    "opts": {
+      "min": 250,
+      "max": 60000,
+      "step": 250
+    }
+  },
+  "rock_refresh_interval_ms": {
+    "type": "integer",
+    "name": "Rock and Ore Scan Interval (ms)",
+    "desc": "Reuse a scan while it still covers the current area.",
+    "init": 5000,
+    "live": 5000,
+    "opts": {
+      "min": 250,
+      "max": 60000,
+      "step": 250
+    }
+  },
+  "scan_budget_ms": {
+    "type": "integer",
+    "name": "Scan Budget (ms)",
+    "desc": "Game-thread time available per scan tick.",
+    "init": 6,
+    "live": 6,
+    "opts": {
+      "min": 1,
+      "max": 50,
+      "step": 1
+    }
+  },
+  "cache_margin_meters": {
+    "type": "integer",
+    "name": "Cache Margin (m)",
+    "desc": "Extra distance included in the resource cache.",
+    "init": 30,
+    "live": 30,
+    "opts": {
+      "min": 5,
+      "max": 200,
+      "step": 1
+    }
+  },
+  "cache_rebuild_interval_ms": {
+    "type": "integer",
+    "name": "Cache Rebuild Interval (ms)",
+    "desc": "Maximum lifetime of the resource cache.",
+    "init": 60000,
+    "live": 60000,
+    "opts": {
+      "min": 5000,
+      "max": 600000,
+      "step": 1000
+    }
+  },
+  "spawner_match_distance_cm": {
+    "type": "integer",
+    "name": "Spawner Match Distance (cm)",
+    "desc": "Distance used to identify a spawner occupied by a resource.",
+    "init": 300,
+    "live": 300,
+    "opts": {
+      "min": 50,
+      "max": 2000,
+      "step": 1
+    }
+  },
+  "foliage_alive_state": {
+    "type": "integer",
+    "name": "Living Foliage State",
+    "desc": "Foliage in this state is treated as alive.",
+    "init": 0,
+    "live": 0,
+    "opts": {
+      "min": 0,
+      "max": 255,
+      "step": 1
+    }
+  },
+  "tree_beam_height_cm": {
+    "type": "integer",
+    "name": "Tree and Wood Beam Height (cm)",
+    "desc": "Custom beam height for trees and wood.",
+    "init": 450,
+    "live": 450,
+    "opts": {
+      "min": 20,
+      "max": 3000,
+      "step": 10
+    }
+  },
+  "resource_beam_height_cm": {
+    "type": "integer",
+    "name": "Other Beam Height (cm)",
+    "desc": "Custom beam height for other resources.",
+    "init": 200,
+    "live": 200,
+    "opts": {
+      "min": 20,
+      "max": 3000,
+      "step": 10
+    }
+  },
+  "beam_effect_path": {
+    "type": "string",
+    "name": "Effect Asset Path",
+    "desc": "Unreal asset path for the marker effect.",
+    "init": "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight",
+    "live": "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight"
+  },
+  "beam_scale.x": {
+    "type": "float",
+    "name": "Beam Scale X",
+    "desc": "Scale of the Niagara effect on this axis.",
+    "init": 1.0,
+    "live": 1.0,
+    "opts": {
+      "min": 0.05,
+      "max": 50,
+      "step": 0.05
+    }
+  },
+  "beam_scale.y": {
+    "type": "float",
+    "name": "Beam Scale Y",
+    "desc": "Scale of the Niagara effect on this axis.",
+    "init": 1.0,
+    "live": 1.0,
+    "opts": {
+      "min": 0.05,
+      "max": 50,
+      "step": 0.05
+    }
+  },
+  "beam_scale.z": {
+    "type": "float",
+    "name": "Beam Scale Z",
+    "desc": "Scale of the Niagara effect on this axis.",
+    "init": 1.0,
+    "live": 1.0,
+    "opts": {
+      "min": 0.05,
+      "max": 50,
+      "step": 0.05
+    }
+  },
+  "color_parameter_names": {
+    "type": "string",
+    "name": "Color Parameters",
+    "desc": "Separate Niagara parameter names with commas.",
+    "init": "User.Color",
+    "live": "User.Color"
+  },
+  "diagnostics": {
+    "type": "boolean",
+    "name": "Diagnostics",
+    "desc": "Write marker diagnostics to UE4SS.log.",
+    "init": false,
+    "live": false
+  }
+}

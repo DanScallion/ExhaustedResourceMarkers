@@ -1,7 +1,6 @@
-local MOD_VERSION = "1.1.0"
+local MOD_VERSION = "1.2.0"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as x scale, so markers left from an earlier load can be recognised and removed
-local MARKER_SCALE_X = 1.0009765625
 
 local function log(message)
     pcall(print, TAG .. tostring(message) .. "\n")
@@ -36,11 +35,17 @@ local DEFAULTS = {
     cache_margin_meters = 30,
     cache_rebuild_interval_ms = 60000,
     chat_messages = true,
+    tree_beam_height_cm = 450,
+    resource_beam_height_cm = 200,
+    rock_refresh_interval_ms = 5000,
     diagnostics = false,
 }
 
 -- {min, max} for numbers from config.lua, anything outside gets clampped
 local LIMITS = {
+    tree_beam_height_cm = { 20, 3000 },
+    resource_beam_height_cm = { 20, 3000 },
+    rock_refresh_interval_ms = { 250, 60000 },
     radius_meters = { 5, 300 },
     max_markers = { 1, 1000 },
     spawner_match_distance_cm = { 50, 2000 },
@@ -135,7 +140,7 @@ local function normalizeTypes(list, listName, defaultScale)
                 match = match,
                 color = color,
                 scale = normalizeScale(entry.scale, defaultScale),
-                componentScale = { X = MARKER_SCALE_X, Y = 1.0, Z = height }, -- x is the leftover fingerprint, z the height
+                componentScale = { X = 1.0, Y = 1.0, Z = height },
                 stack = stack,
                 stackStep = stackStep,
             }
@@ -206,7 +211,7 @@ local SPAWN_CLOCK_CHECK_EVERY = 4 -- spawning is slower, so the clock is checked
 local MAX_CONSECUTIVE_FAILURES = 10 -- this many errors in a row switch the mod off until restart
 local MAX_SPAWN_FAILURES = 3
 local RETRY_BACKOFF_MS = 10000 -- wait before trying a failed spawn or asset load agian
-local RADIUS_SQ, CACHE_MARGIN_SQ, REACH_SQ, MATCH_CM, MATCH_SQ
+local RADIUS_SQ, CACHE_MARGIN_SQ, REACH_SQ, OCCUPANT_REACH_SQ, MATCH_CM, MATCH_SQ
 local function updateScanDistances()
     local radius = config.radius_meters * 100
     local margin = config.cache_margin_meters * 100
@@ -216,9 +221,9 @@ local function updateScanDistances()
     REACH_SQ = (radius + margin) * (radius + margin)
     MATCH_CM = config.spawner_match_distance_cm
     MATCH_SQ = MATCH_CM * MATCH_CM
+    OCCUPANT_REACH_SQ = (radius + margin + MATCH_CM) ^ 2
 end
 updateScanDistances()
-local BEAM_ASSET_NAME = config.beam_effect_path:match("%.([^%.]+)$") or config.beam_effect_path
 
 local hotkeyOn = false
 local buildModeOn = false
@@ -236,7 +241,7 @@ local cachedController = nil
 local controllerSearchAt = 0
 local builder = nil
 local builderSearchAt = 0
-local cache = nil
+local cache, occupantCache = nil, nil
 local job = nil
 local activeMarkers = {} -- marker key -> component on screen
 local freeMarkers = {} -- hidden components wating for reuse
@@ -246,9 +251,8 @@ local niagaraLibrary = nil
 local libraryRetryAt = 0
 local spawnFailures = 0
 local spawnBlockedUntil = 0
-local consecutiveFailures = 0
+local tickFailures, refreshFailures = 0, 0
 local errorCounts = {}
-local tickPending = false
 local nextTickAt = -math.huge
 local diagnosticsLogged = false
 local propertiesLogged = false
@@ -282,6 +286,8 @@ local function isValid(object)
     local ok, valid = pcall(callIsValid, object)
     return ok and valid == true
 end
+
+local treeBeam = require("tree_beam_prototype")(isValid, log, config)
 
 local function getField(object, name)
     return object[name]
@@ -535,8 +541,13 @@ local function callActivate(component)
     component:Activate(true)
 end
 
+local function readActive(component)
+    return component:IsActive()
+end
+
 local function callDestroy(component)
-    component:K2_DestroyComponent(component)
+    local owner = component:GetOwner()
+    component:K2_DestroyComponent(isValid(owner) and owner or component)
 end
 
 local function callSetVec3(component, name, value)
@@ -568,11 +579,17 @@ local function markerKey(location, label)
 end
 
 local function destroyMarker(component)
+    if treeBeam.owns(component) then
+        treeBeam.destroy(component)
+        return
+    end
     if not isValid(component) then
         return
     end
     pcall(callSetVisibility, component, false)
-    pcall(callDestroy, component)
+    pcall(callDeactivateImmediate, component)
+    local ok, err = pcall(callDestroy, component)
+    if not ok then logLimited("marker destroy", "could not destroy marker piece: " .. tostring(err)) end
 end
 
 -- component z scale stretches the light upwards, User.Scale alone barely did anyting on this effect
@@ -582,7 +599,11 @@ local function configureMarker(component, resource)
     for _, name in ipairs(config.color_parameter_names) do
         pcall(callSetColor, component, name, resource.color)
     end
-    pcall(callSetVisibility, component, true)
+    local visible, err = pcall(callSetVisibility, component, true)
+    if not visible then
+        logLimited("marker visibility", "could not show marker piece: " .. tostring(err))
+    end
+    return visible
 end
 
 -- after 3 failures in a row spawning pauses for 10 s instead of trying every tick
@@ -612,25 +633,42 @@ end
 
 -- reuses a hidden marker from the pool if there is one, otherwise spawns a new one
 local function acquireMarker(world, marker)
+    if marker.singleBeam then return treeBeam.spawn(world, marker.vector, ZERO_ROTATION, marker.resource) end
     while #freeMarkers > 0 do
         local component = table.remove(freeMarkers)
         if isValid(component) and pcall(callMove, component, marker.vector) then
-            pcall(callActivate, component)
-            configureMarker(component, marker.resource)
-            return component
+            local activated, err = pcall(callActivate, component)
+            if activated then
+                local checked, active = pcall(readActive, component)
+                if checked and active == false then
+                    activated, err = false, "component stayed inactive"
+                end
+            end
+            if activated and configureMarker(component, marker.resource) then
+                return component
+            end
+            if not activated then
+                logLimited("marker activation", "could not reactivate marker piece: " .. tostring(err))
+            end
+            destroyMarker(component)
+            break
         end
         destroyMarker(component)
     end
     local component = spawnMarker(world, marker)
-    if component == nil then
-        return nil
+    if component ~= nil and configureMarker(component, marker.resource) then
+        return component
     end
-    configureMarker(component, marker.resource)
-    return component
+    destroyMarker(component)
+    return nil
 end
 
 -- hidden and kept for reuse, DeactivateImmediate so no particles linger, plain Deactivate if that one fails
 local function releaseMarker(component)
+    if treeBeam.owns(component) then
+        treeBeam.release(component)
+        return
+    end
     if not isValid(component) then
         return
     end
@@ -652,45 +690,6 @@ local function hideAllMarkers()
     end
 end
 
-local function readScaleX(component)
-    return component.RelativeScale3D.X
-end
-
-local function readAssetName(component)
-    return component:GetAsset():GetFullName()
-end
-
--- marker from before a hot reload, found by the x scale fingerprint and the effect name
-local function isLeftoverMarker(component)
-    local scaleOk, scaleX = pcall(readScaleX, component)
-    if not scaleOk or scaleX ~= MARKER_SCALE_X then
-        return false
-    end
-    local assetOk, assetName = pcall(readAssetName, component)
-    if not assetOk or type(assetName) ~= "string" then
-        return false
-    end
-    return assetName:find(BEAM_ASSET_NAME, 1, true) ~= nil
-end
-
-local function sweepLeftoverMarkers()
-    local ok, components = pcall(FindAllOf, "NiagaraComponent")
-    if not ok or type(components) ~= "table" then
-        return
-    end
-    local removed = 0
-    for _, component in ipairs(components) do
-        if isValid(component) and isLeftoverMarker(component) then
-            destroyMarker(component)
-            removed = removed + 1
-        end
-    end
-    if removed > 0 then
-        log("removed " .. removed .. " marker(s) left over from a previous load")
-    end
-end
-
--- numbers for the diag lines, most of them only filled when diagnostics is on
 local function newReport()
     return {
         slices = 0,
@@ -734,7 +733,10 @@ local function gridCell(value)
 end
 
 -- closest map object in the 3x3 cells around location, cells are MATCH_CM wide so nothing in range is mised
-local function nearestOccupant(grid, location)
+local QUARTZ_SPAWNER_CLASS = "BP_PalMapObjectSpawner_RockQuartz_C"
+local QUARTZ_ROCK_CLASS = "BP_MapObject_DamagableRock0003_C"
+
+local function nearestOccupant(grid, location, occupantClass)
     local cellX = gridCell(location.x)
     local cellY = gridCell(location.y)
     local best = nil
@@ -746,10 +748,12 @@ local function nearestOccupant(grid, location)
             if bucket ~= nil then
                 for index = 1, #bucket do
                     local entry = bucket[index]
-                    local distanceSq = distanceSq3D(entry.location, location)
-                    if distanceSq < bestSq then
-                        best = entry
-                        bestSq = distanceSq
+                    if occupantClass == nil or entry.className == occupantClass then
+                        local distanceSq = distanceSq3D(entry.location, location)
+                        if distanceSq < bestSq then
+                            best = entry
+                            bestSq = distanceSq
+                        end
                     end
                 end
             end
@@ -764,12 +768,10 @@ local function loadList(target, classNameToFind)
     if not ok then
         logLimited("find:" .. classNameToFind, "FindAllOf(" .. classNameToFind .. ") failed: " .. tostring(all))
     end
-    if not ok or type(all) ~= "table" then
-        all = {}
-    end
-    target.list = all
+    local reliable = ok and type(all) == "table"
+    target.list = reliable and all or {}
     target.index = 1
-    return #all
+    return #target.list, reliable
 end
 
 -- visits from the saved index until deadline, false = not done yet, carries on next tick
@@ -850,7 +852,7 @@ local function collectOccupant(current, object)
         return
     end
     local location = actorLocation(object)
-    if location == nil or distanceSq2D(location, current.origin) > REACH_SQ then
+    if location == nil or distanceSq2D(location, current.origin) > OCCUPANT_REACH_SQ then
         return
     end
     local name = className(object)
@@ -868,6 +870,11 @@ local function collectOccupant(current, object)
 end
 
 local function evaluateTree(current, entry)
+    if entry.object == nil then return end
+    if not isValid(entry.object) then
+        entry.object = nil
+        return
+    end
     local state = readFoliageState(entry.object)
     if state == nil then
         return
@@ -892,7 +899,9 @@ end
 -- no map object within spawner_match_distance_cm of the spawner, so the rock was minned
 local function evaluateRock(current, entry)
     local distanceSq = distanceSq2D(entry.location, current.origin)
-    if distanceSq > RADIUS_SQ or not isValid(entry.object) then
+    if distanceSq > RADIUS_SQ or entry.object == nil then return end
+    if not isValid(entry.object) then
+        entry.object = nil
         return
     end
     local report = current.report
@@ -902,7 +911,17 @@ local function evaluateRock(current, entry)
         classStats.total = classStats.total + 1
         report.spawnerClasses[entry.className] = classStats
     end
-    local occupant, occupantSq = nearestOccupant(current.grid, entry.location)
+    -- Nearby copper rocks and item drops cannot occupy a quartz spawner.
+    local occupantClass = entry.className == QUARTZ_SPAWNER_CLASS and QUARTZ_ROCK_CLASS or nil
+    local occupant, occupantSq = nearestOccupant(current.grid, entry.location, occupantClass)
+    if config.diagnostics and occupantClass ~= nil and announceNextResult then
+        log(string.format(
+            "diag quartz at (%.0f, %.0f, %.0f): %s",
+            entry.location.x, entry.location.y, entry.location.z,
+            occupant and occupantSq <= MATCH_SQ
+                and string.format("quartz actor %.0f cm away", math.sqrt(occupantSq))
+                or "no quartz actor within match distance"))
+    end
     if occupant ~= nil and occupantSq <= MATCH_SQ then
         if config.diagnostics then
             countInto(report.neighbourClasses, occupant.className)
@@ -920,24 +939,31 @@ local function byDistance(a, b)
     return a.distanceSq < b.distanceSq
 end
 
--- stacked lights for one spot, built once and kept on the entry, one light is about 80 cm high
-local function piecesOf(entry)
-    local pieces = entry.pieces
-    if pieces ~= nil then
-        return pieces
-    end
-    pieces = {}
+-- Cache the marker description for the active renderer.
+local function piecesOf(entry, singleBeam)
     local resource = entry.resource
+    local pieces = entry.pieces
+    if pieces ~= nil and entry.singleBeam == singleBeam then return pieces end
+    pieces = {}
     local location = entry.location
     local baseKey = markerKey(location, resource.label)
-    for level = 0, resource.stack - 1 do
-        pieces[#pieces + 1] = {
-            key = baseKey .. ":" .. level,
+    if singleBeam then
+        pieces[1] = {
+            key = baseKey .. ":mesh",
             resource = resource,
-            vector = { X = location.x, Y = location.y, Z = location.z + level * resource.stackStep },
+            singleBeam = true,
+            vector = { X = location.x, Y = location.y, Z = location.z },
         }
+    else
+        for level = 0, resource.stack - 1 do
+            pieces[#pieces + 1] = {
+                key = baseKey .. ":" .. level,
+                resource = resource,
+                vector = { X = location.x, Y = location.y, Z = location.z + level * resource.stackStep },
+            }
+        end
     end
-    entry.pieces = pieces
+    entry.pieces, entry.singleBeam = pieces, singleBeam
     return pieces
 end
 
@@ -948,9 +974,10 @@ local function selectMarkers(current)
         table.sort(markers, byDistance)
     end
     local wanted = {}
+    local singleBeam = #markers > 0 and treeBeam.ready()
     for index = 1, math.min(#markers, config.max_markers) do
         local marker = markers[index]
-        local pieces = piecesOf(marker)
+        local pieces = piecesOf(marker, singleBeam)
         for pieceIndex = 1, #pieces do
             local piece = pieces[pieceIndex]
             wanted[piece.key] = piece
@@ -1092,23 +1119,37 @@ local STAGES = {
     function(current, deadline)
         return sweepList(current, deadline, CLOCK_CHECK_EVERY, evaluateTree)
     end,
-    -- find map objects
+    -- Keep the rock scan while its age and coverage still allow reuse.
     function(current)
-        if cache == nil or #cache.spawners == 0 then
+        if cache == nil or #cache.spawners == 0 then return true end
+        if occupantCache and now() - occupantCache.builtAt < config.rock_refresh_interval_ms
+            and distanceSq2D(current.origin, occupantCache.origin) <= CACHE_MARGIN_SQ then
+            current.grid = occupantCache.grid
+            current.report.mapObjectsTotal = occupantCache.total
+            current.report.mapObjectsNearby = occupantCache.nearby
             return true
         end
-        current.report.mapObjectsTotal = loadList(current, "PalMapObject")
+        local total, reliable = loadList(current, "PalMapObject")
+        current.report.mapObjectsTotal = total
+        if reliable then
+            current.scanningOccupants = true
+            current.grid = {}
+        else
+            current.list = nil
+        end
         return true
     end,
-    -- map objects into grid
     function(current, deadline)
-        return sweepList(current, deadline, CLOCK_CHECK_EVERY, collectOccupant)
+        if not current.scanningOccupants then return true end
+        if not sweepList(current, deadline, CLOCK_CHECK_EVERY, collectOccupant) then return false end
+        occupantCache = {
+            grid = current.grid, origin = current.origin, builtAt = now(),
+            total = current.report.mapObjectsTotal, nearby = current.report.mapObjectsNearby,
+        }
+        return true
     end,
-    -- queue spawners
     function(current)
-        if cache == nil then
-            return true
-        end
+        if current.grid == nil or cache == nil then return true end
         current.list = cache.spawners
         current.index = 1
         return true
@@ -1170,13 +1211,11 @@ local function disableMod(reason)
 end
 
 -- 10 failures in a row switch the mod off, so a broken state can't keep erroring every tick
-local function recordFailure(where, err)
-    consecutiveFailures = consecutiveFailures + 1
+local function recordFailure(where, err, count)
     logLimited(where, where .. " failed: " .. tostring(err))
-    if consecutiveFailures < MAX_CONSECUTIVE_FAILURES then
-        return
+    if count >= MAX_CONSECUTIVE_FAILURES then
+        disableMod(count .. " consecutive errors, last in " .. where)
     end
-    disableMod(consecutiveFailures .. " consecutive errors, last in " .. where)
 end
 
 -- runs stages until one isn't finished or the budget is used up
@@ -1187,7 +1226,8 @@ local function advanceJob()
         local stage = job.stage
         local ok, done = pcall(STAGES[stage], job, deadline)
         if not ok then
-            recordFailure("refresh stage " .. stage, done)
+            refreshFailures = refreshFailures + 1
+            recordFailure("refresh stage " .. stage, done, refreshFailures)
             finishJob()
             return
         end
@@ -1199,6 +1239,7 @@ local function advanceJob()
             return
         end
     end
+    refreshFailures = 0
     finishJob()
 end
 
@@ -1217,7 +1258,6 @@ local function startJob(pawn)
         index = 1,
         foliage = {},
         spawners = {},
-        grid = {},
         markers = {},
         report = newReport(),
     }
@@ -1303,14 +1343,20 @@ local function endSession(reason)
     sessionReady = false
     wasActive = false
     job = nil
-    cache = nil
+    cache, occupantCache = nil, nil
     builder = nil
     beamAsset = nil
     sessionWorld = nil
     sessionWorldAddress = nil
     sessionPawnAddress = nil
+    cachedController = nil
+    controllerSearchAt = 0
+    builderSearchAt = 0
+    tickFailures, refreshFailures = 0, 0
+    buildModeOn = false
     activeMarkers = {}
     freeMarkers = {}
+    treeBeam.reset()
     log("session ended (" .. reason .. "), marker references dropped")
 end
 
@@ -1320,24 +1366,24 @@ local function beginSession(pawn, pawnAddress, world, worldAddress)
     sessionWorld = world
     sessionWorldAddress = worldAddress
     diagnosticsLogged = false
-    sweepLeftoverMarkers()
-    logEffectParameters()
+    forceRefresh = true
     log("session started")
 end
 
 -- same pawn = nothing to do, new pawn in the same world (respawn) keeps the markres, new world starts over
 local function trackSession(pawn)
     local pawnAddress = addressOf(pawn)
-    if sessionReady and pawnAddress ~= nil and pawnAddress == sessionPawnAddress and isValid(sessionWorld) then
-        return true
-    end
     local world = readWorld(pawn)
-    if world == nil then
-        endSession("world unavailable")
+    local worldAddress = world and addressOf(world)
+    if worldAddress == nil or pawnAddress == nil then
+        endSession("world or player unavailable")
         return false
     end
-    local worldAddress = addressOf(world)
     if sessionReady and worldAddress == sessionWorldAddress then
+        if pawnAddress ~= sessionPawnAddress then
+            cache, occupantCache, job, builder = nil, nil, nil, nil
+            forceRefresh = true
+        end
         sessionPawnAddress = pawnAddress
         sessionWorld = world
         return true
@@ -1352,7 +1398,7 @@ local function deactivate()
         return
     end
     wasActive = false
-    job = nil
+    job, cache, occupantCache = nil, nil, nil
     hideAllMarkers()
 end
 
@@ -1376,6 +1422,7 @@ local function tick()
     end
     if not wasActive then
         wasActive = true
+        logEffectParameters()
         forceRefresh = true
     end
     if job ~= nil then
@@ -1389,15 +1436,14 @@ local function tick()
     startJob(pawn)
 end
 
--- tickPending cleared first, so the next loop can queue agian
 local function runTick()
-    tickPending = false
     local ok, err = pcall(tick)
     if ok then
-        consecutiveFailures = 0
+        tickFailures = 0
         return
     end
-    recordFailure("tick", err)
+    tickFailures = tickFailures + 1
+    recordFailure("tick", err, tickFailures)
 end
 
 local function toggle()
@@ -1504,12 +1550,15 @@ local function applySetting(key, value)
 
     if key == "radius_meters" or key == "cache_margin_meters" or key == "spawner_match_distance_cm" then
         updateScanDistances()
-        cache = nil
+        cache, occupantCache = nil, nil
     elseif key == "show_trees" or key == "show_rocks" then
-        cache = nil
+        cache, occupantCache = nil, nil
+    elseif key == "rock_refresh_interval_ms" then
+        occupantCache = nil
+    elseif key == "tree_beam_height_cm" or key == "resource_beam_height_cm" then
+        hideAllMarkers()
     elseif key == "beam_effect_path" then
         clearMarkerEffects()
-        BEAM_ASSET_NAME = value:match("%.([^%.]+)$") or value
         beamAsset, assetRetryAt, spawnFailures, spawnBlockedUntil = nil, 0, 0, 0
     elseif key == "max_markers" then
         while #freeMarkers > value do destroyMarker(table.remove(freeMarkers)) end
@@ -1521,32 +1570,33 @@ local function applySetting(key, value)
     forceRefresh = true
 end
 
-local nativeHotkey = false
-local hasMenu, managesHotkey = require("marker_settings")(config, LIMITS, log, applySetting, function()
-    if nativeHotkey then runToggle() end
-end)
-nativeHotkey = managesHotkey
+local dek = require("dek_settings")
+local hasMenu, nativeHotkey = false, false
+if dek.betterEnabled() then
+    hasMenu, nativeHotkey = require("marker_settings")(config, LIMITS, log, applySetting, function()
+        if nativeHotkey then runToggle() end
+    end)
+end
+local dekActive = dek.start("ExhaustedResourceMarkers", hasMenu, function(key)
+    local axis = key:match("^beam_scale%.([xyz])$")
+    if axis then return config.beam_scale[axis:upper()] end
+    if key == "color_parameter_names" then return table.concat(config.color_parameter_names, ", ") end
+    return config[key]
+end, applySetting, log)
+hasMenu = hasMenu or dekActive
 if not nativeHotkey then registerHotkey() end
 
--- LoopAsync thread, only queues a game thread tick once the last one ran, so they can't pile up on a slow frmae
 local function onLoop()
-    if tickPending or disabled then
-        return false
-    end
-    if hasMenu then
-        local time = now()
-        if time < nextTickAt then return false end
-        nextTickAt = time + config.poll_interval_ms
-    end
-    tickPending = true
-    if not pcall(ExecuteInGameThread, runTick) then
-        tickPending = false
-    end
-    return false
+    if disabled then return end
+    local time = now()
+    if time < nextTickAt then return end
+    nextTickAt = time + config.poll_interval_ms
+    runTick()
 end
 
--- With the menu active, the loop wakes at the shortest supported interval and queues scans at the configured rate.
-local loopOk, loopErr = pcall(LoopAsync, hasMenu and LIMITS.poll_interval_ms[1] or config.poll_interval_ms, onLoop)
+-- A game-thread timer keeps the scheduler and its native object use on the same thread.
+local loopOk, loopErr = pcall(LoopInGameThreadWithDelay,
+    hasMenu and LIMITS.poll_interval_ms[1] or config.poll_interval_ms, onLoop)
 if not loopOk then
     log("could not start the update loop, mod inactive: " .. tostring(loopErr))
 end

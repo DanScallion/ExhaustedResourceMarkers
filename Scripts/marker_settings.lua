@@ -41,6 +41,7 @@ return function(config, limits, log, applySetting, onHotkey)
         add({ type = "header", label = "Performance" })
         slider("poll_interval_ms", "Update Interval (ms)", 50)
         slider("refresh_interval_ms", "Refresh Interval (ms)", 250)
+        slider("rock_refresh_interval_ms", "Rock and Ore Scan Interval (ms)", 250)
         slider("scan_budget_ms", "Scan Budget per Tick (ms)")
         slider("cache_margin_meters", "Cache Margin (m)")
         slider("cache_rebuild_interval_ms", "Cache Rebuild Interval (ms)", 1000)
@@ -48,6 +49,9 @@ return function(config, limits, log, applySetting, onHotkey)
         slider("foliage_alive_state", "Living Foliage State", 1, { 0, 255 })
 
         add({ type = "header", label = "Marker Effect" })
+        slider("tree_beam_height_cm", "Tree and Wood Beam Height (cm)", 10)
+        slider("resource_beam_height_cm", "Other Beam Height (cm)", 10)
+        add({ type = "header", label = "Fallback Niagara Effect" })
         add({ key = "beam_effect_path", type = "text", label = "Effect Asset Path",
             maxLength = 256, default = config.beam_effect_path })
         for _, axis in ipairs({ "X", "Y", "Z" }) do

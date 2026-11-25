@@ -10,7 +10,9 @@ return {
 
     -- treasure light, the old blue beam (DroppedCharacter) has no colour parameter so it can't be tinted
     beam_effect_path = "/Game/Pal/Effect/Treasure/NS_MapObject_TreasureLight.NS_MapObject_TreasureLight",
-    beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- effects own User.Scale, barly changes this light, use height and stack for size
+    beam_scale = { x = 1.0, y = 1.0, z = 1.0 }, -- fallback Niagara scale
+    tree_beam_height_cm = 450, -- custom mesh height for trees and wood
+    resource_beam_height_cm = 200, -- custom mesh height for other resources
     color_parameter_names = { "User.Color" }, -- user parameter that gets the colour, found wiht the diag effect lines
     -- only read when diagnostics = true, logs which user parameters each effect has
     diagnostic_effect_paths = {
@@ -20,7 +22,7 @@ return {
     },
 
     -- trees and other foliage, first match on the FoliageTypeId wins, "" matches everyting
-    -- color = { red, green, blue } from 0 to 1, height = how tall one light is stretched, stack = lights on top of each other (1 to 10), stack_step_cm = distance between them, one light is about 80 cm
+    -- Color applies to either renderer. Height, stack, and stack_step_cm apply to the Niagara fallback.
     foliage_types = {
         { label = "mushroom", match = { "Mushroom" }, color = { 1.0, 0.35, 0.7 } },
         { label = "tree", match = { "" }, color = { 0.1, 1.0, 0.1 }, height = 5.0, stack = 5, stack_step_cm = 80 },
@@ -50,6 +52,7 @@ return {
 
     poll_interval_ms = 250, -- how often the mod wakes up
     refresh_interval_ms = 2000, -- how often markers are worked out agian while shown
+    rock_refresh_interval_ms = 5000, -- reuse the occupancy grid while it covers the current area
     scan_budget_ms = 6, -- game thread time per tick, more = quicker refresh but can hitch
     cache_margin_meters = 30, -- extra reach kept in the cache, walking this far rebuilds it
     cache_rebuild_interval_ms = 60000, -- rebuild anyway after this long, so newly loaded trees and rocks get picked up
