@@ -1,12 +1,13 @@
 Exhausted Resource Markers - 1.2.0
 
-Are you tired of not knowing if you build over tree or rocks or iron or other resources? I was, so I made this simple mod to show markers, either press F9 or try to build something, it will show markers for every type of resource. This way you can avoid building over resources and blocking their respawn, and my goldfish memory is too bad to remember where is what.
+Are you tired of not knowing if you build over tree or rocks or iron or other resources? I was, so I made this simple mod to show markers, 
+either press F9 or try to build something, it will show markers for every type of resource. This way you can avoid building over resources 
+and blocking their respawn, and my goldfish memory is too bad to remember where is what.
 
 
 CHANGELOG
 ---------
-
-Since 1.0.0
+1.2.0
 
 - Added Better Mod Manager support. Change the hotkey, marker visibility,
   scan settings, and beam effects in-game without restarting.
@@ -24,6 +25,12 @@ Since 1.0.0
   clears cached scans when you switch worlds or respawn.
 - Fixed the error safeguard so ten failed scans in a row switch the mod off
   and log the reason. A successful scan resets the failure count.
+- Markers now use custom beam mesh .pak effect created in unreal engine 5.1.1
+
+
+1.0.0
+
+Initial release
 
 
 REQUIREMENTS
