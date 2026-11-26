@@ -145,7 +145,7 @@ NOTES
 -----
 
 - It is Purely visual. it never changes respawning points or your save and is safe to remove mid game.
-- Made for single-player and hosting your own world as client. Not tested if it works in multiplayer yet, I will check eventualy and try to fix if not. Do NOT install it on server, it is client side as all UI mods are.
+- Made for single-player and hosting your own world as client. Tested and it works in multiplayer, just do NOT install it on server, it is client side as all UI mods are.
 
 UNINSTALL
 ---------
