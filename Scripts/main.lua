@@ -1,4 +1,4 @@
-local MOD_VERSION = "1.2.0"
+local MOD_VERSION = "1.2.1"
 local TAG = "[ExhaustedResourceMarkers] "
 -- exact float only this mod uses as x scale, so markers left from an earlier load can be recognised and removed
 
@@ -631,9 +631,45 @@ local function spawnMarker(world, marker)
     return nil
 end
 
+local SURFACE_BEAM_LABELS = {
+    stone = true, ore = true, iron = true, coal = true, sulfur = true,
+    quartz = true, paldium = true, crystal = true, ["rare ore"] = true,
+}
+
+local function surfaceBeamVector(world, vector, label)
+    local ok, groundZ = pcall(function()
+        local library = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+        if not isValid(library) then return nil end
+        local start = { X = vector.X, Y = vector.Y, Z = vector.Z + 60 }
+        local finish = { X = vector.X, Y = vector.Y, Z = vector.Z - 100 }
+        local hit = {}
+        local noDebug = { R = 0, G = 0, B = 0, A = 0 }
+        if not library:LineTraceSingle(world, start, finish, 0, false, {}, 0, hit, true, noDebug, noDebug, 0) then
+            return nil
+        end
+        local point, normal = hit.ImpactPoint, hit.ImpactNormal
+        if point and normal and normal.Z >= 0.45 and point.Z >= finish.Z and point.Z < start.Z then
+            return point.Z
+        end
+    end)
+    local z = ok and groundZ and math.max(vector.Z, groundZ + 12) or vector.Z
+    if config.diagnostics then
+        log(string.format("%s beam placement at (%.0f, %.0f): spawner Z %.0f, surface Z %s, beam Z %.0f, height %.0f cm",
+            label, vector.X, vector.Y, vector.Z, ok and groundZ and string.format("%.0f", groundZ) or "unavailable",
+            z, config.resource_beam_height_cm))
+    end
+    if z == vector.Z then return vector end
+    return { X = vector.X, Y = vector.Y, Z = z }
+end
+
 -- reuses a hidden marker from the pool if there is one, otherwise spawns a new one
 local function acquireMarker(world, marker)
-    if marker.singleBeam then return treeBeam.spawn(world, marker.vector, ZERO_ROTATION, marker.resource) end
+    if marker.singleBeam then
+        local label = marker.resource.label
+        local vector = marker.vector
+        if SURFACE_BEAM_LABELS[label] then vector = surfaceBeamVector(world, vector, label) end
+        return treeBeam.spawn(world, vector, ZERO_ROTATION, marker.resource)
+    end
     while #freeMarkers > 0 do
         local component = table.remove(freeMarkers)
         if isValid(component) and pcall(callMove, component, marker.vector) then
@@ -736,7 +772,12 @@ end
 local QUARTZ_SPAWNER_CLASS = "BP_PalMapObjectSpawner_RockQuartz_C"
 local QUARTZ_ROCK_CLASS = "BP_MapObject_DamagableRock0003_C"
 
-local function nearestOccupant(grid, location, occupantClass)
+local function readMapObjectId(object, field)
+    local ok, name = pcall(function() return object[field]:ToString() end)
+    if ok and type(name) == "string" and name ~= "None" and name ~= "" then return name end
+end
+
+local function nearestOccupant(grid, location, occupantClass, expectedStoneId, minedStone)
     local cellX = gridCell(location.x)
     local cellY = gridCell(location.y)
     local best = nil
@@ -750,7 +791,11 @@ local function nearestOccupant(grid, location, occupantClass)
                     local entry = bucket[index]
                     if occupantClass == nil or entry.className == occupantClass then
                         local distanceSq = distanceSq3D(entry.location, location)
-                        if distanceSq < bestSq then
+                        -- A known ID mismatch outside the spawn point is a neighbouring rock.
+                        local matchesStone = not minedStone or (entry.isRock and not entry.hidden
+                            and (not expectedStoneId or not entry.mapId or expectedStoneId == entry.mapId
+                                or distanceSq <= 25 * 25))
+                        if matchesStone and distanceSq < bestSq then
                             best = entry
                             bestSq = distanceSq
                         end
@@ -841,12 +886,17 @@ local function collectSpawnerEntry(current, spawner)
         end
         return
     end
+    local minedStone = resource.label == "stone" and not name:find("SmallStone", 1, true)
+    local expectedStoneId
+    if minedStone and readField(spawner, "bLotteryByMultiLotteryParameters") ~= true then
+        expectedStoneId = readMapObjectId(spawner, "MapObjectId")
+    end
     current.spawners[#current.spawners + 1] = {
         object = spawner, location = location, vector = toVector(location), className = name, resource = resource,
+        minedStone = minedStone, expectedStoneId = expectedStoneId,
     }
 end
 
--- spawners are left out so a spawner never counts as its own rock
 local function collectOccupant(current, object)
     if not isValid(object) then
         return
@@ -856,7 +906,8 @@ local function collectOccupant(current, object)
         return
     end
     local name = className(object)
-    if name:find("Spawner", 1, true) ~= nil then
+    -- Loose loot does not keep a node occupied. Keep pickups spawned as resources, such as small stones and logs.
+    if name == "BP_MapObject_CommonDropItem3D_C" or name:find("Spawner", 1, true) ~= nil then
         return
     end
     local key = gridCell(location.x) * GRID_STRIDE + gridCell(location.y)
@@ -865,7 +916,14 @@ local function collectOccupant(current, object)
         bucket = {}
         current.grid[key] = bucket
     end
-    bucket[#bucket + 1] = { location = location, className = name }
+    local entry = { location = location, className = name }
+    if name:find("DamagableRock", 1, true) or name:find("DestroyableWall_Rock", 1, true) then
+        entry.isRock = true
+        entry.hidden = readField(object, "bHidden") == true
+        local model = readField(object, "MapObjectModel")
+        if isValid(model) then entry.mapId = readMapObjectId(model, "MapObjectMasterDataId") end
+    end
+    bucket[#bucket + 1] = entry
     current.report.mapObjectsNearby = current.report.mapObjectsNearby + 1
 end
 
@@ -913,7 +971,17 @@ local function evaluateRock(current, entry)
     end
     -- Nearby copper rocks and item drops cannot occupy a quartz spawner.
     local occupantClass = entry.className == QUARTZ_SPAWNER_CLASS and QUARTZ_ROCK_CLASS or nil
-    local occupant, occupantSq = nearestOccupant(current.grid, entry.location, occupantClass)
+    local occupant, occupantSq = nearestOccupant(current.grid, entry.location, occupantClass,
+        entry.expectedStoneId, entry.minedStone)
+    if config.diagnostics and entry.minedStone and announceNextResult then
+        local nearest, nearestSq = nearestOccupant(current.grid, entry.location)
+        log(string.format("diag stone %s at (%.0f, %.0f, %.0f), expected %s: %s; nearest %s",
+            entry.className, entry.location.x, entry.location.y, entry.location.z, entry.expectedStoneId or "unknown",
+            occupant and occupantSq <= MATCH_SQ and string.format("occupied %.0f cm away", math.sqrt(occupantSq)) or "depleted",
+            nearest and nearestSq <= MATCH_SQ and string.format("%s [%s] %.0f cm away, hidden=%s",
+                nearest.className, nearest.mapId or "unknown", math.sqrt(nearestSq), tostring(nearest.hidden == true))
+                or "nothing within match distance"))
+    end
     if config.diagnostics and occupantClass ~= nil and announceNextResult then
         log(string.format(
             "diag quartz at (%.0f, %.0f, %.0f): %s",

@@ -1,7 +1,7 @@
 {
   "meta": {
     "game": true,
-    "vers": "1.2.0",
+    "vers": "1.2.1",
     "auth": "DanScallion",
     "desc": "Settings for Exhausted Resource Markers. The hotkey is configured in config.lua or Better Mod Manager. Better Mod Manager takes priority when it is active. In that case, change these settings in Better Mod Manager. When Dek is in charge, Save applies changes in the current session."
   },

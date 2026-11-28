@@ -1,4 +1,4 @@
-Exhausted Resource Markers - 1.2.0
+Exhausted Resource Markers - 1.2.1
 
 Are you tired of not knowing if you build over tree or rocks or iron or other resources? I was, so I made this simple mod to show markers, 
 either press F9 or try to build something, it will show markers for every type of resource. This way you can avoid building over resources 
@@ -7,6 +7,15 @@ and blocking their respawn, and my goldfish memory is too bad to remember where 
 
 CHANGELOG
 ---------
+1.2.1
+
+- Fixed missing resource node markers when mined loot is left on the ground.
+- Adjusted stone and ore beams to sit just above nearby ground so the
+  surface does not clip the base of the beam.
+- Fixed stone markers that could stay missing until you rejoined the world.
+  Hidden rocks and nearby buildings no longer block those markers.
+
+
 1.2.0
 
 - Added Better Mod Manager support. Change the hotkey, marker visibility,
